@@ -1,0 +1,14 @@
+{
+  "name": "metrology-master",
+  "version": "1.0.0",
+  "description": "计量器具台账管理系统",
+  "scripts": {
+    "setup": "cd server && npm install && cd ../client && npm install && npm run build",
+    "build": "cd client && npm run build",
+    "start": "cd server && node app.js",
+    "dev": "cd server && npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>计量器具管理系统 - 登录</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; }
+    .login-card { background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.3); padding: 40px; max-width: 420px; width: 100%; }
+    .login-card h3 { color: #333; margin-bottom: 8px; }
+    .login-card .subtitle { color: #888; font-size: 14px; margin-bottom: 30px; }
+  </style>
+</head>
+<body>
+  <div class="container d-flex justify-content-center">
+    <div class="login-card">
+      <h3>📐 计量器具管理系统</h3>
+      <p class="subtitle">海一采油管理区 · 中心一号平台</p>
+      <form id="loginForm">
+        <div class="mb-3">
+          <label class="form-label">用户名</label>
+          <input type="text" class="form-control" id="username" placeholder="请输入用户名" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">密码</label>
+          <input type="password" class="form-control" id="password" placeholder="请输入密码" required>
+        </div>
+        <div id="errorMsg" class="alert alert-danger d-none"></div>
+        <button type="submit" class="btn btn-primary w-100 py-2">登 录</button>
+      </form>
+      <p class="text-muted text-center mt-3" style="font-size:12px;">默认账号: admin / admin123</p>
+    </div>
+  </div>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('errorMsg');
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (data.code === 200) {
+          localStorage.setItem('token', data.data.token);
+          localStorage.setItem('user', JSON.stringify(data.data.user));
+          window.location.href = '/';
+        } else {
+          errorEl.textContent = data.message;
+          errorEl.classList.remove('d-none');
+        }
+      } catch (err) {
+        errorEl.textContent = '网络错误，请重试';
+        errorEl.classList.remove('d-none');
+      }
+    });
+  </script>
+</body>
+</html>

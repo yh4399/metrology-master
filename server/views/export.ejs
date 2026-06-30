@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数据导出</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6fa; }
+    .sidebar { background: #2c3e50; min-height: 100vh; color: white; padding: 20px 0; position: fixed; width: 220px; }
+    .sidebar h5 { padding: 10px 20px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+    .main { margin-left: 220px; padding: 30px; }
+    .card { border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+    .export-card { text-align: center; padding: 30px; cursor: pointer; transition: .3s; }
+    .export-card:hover { transform: translateY(-3px); box-shadow: 0 6px 20px rgba(0,0,0,.1); }
+    .export-card i { font-size: 48px; display: block; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h5>📐 计量器具管理</h5>
+    <nav class="nav flex-column">
+      <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> 仪表盘</a>
+      <a class="nav-link" href="/import"><i class="bi bi-upload"></i> 数据导入</a>
+      <a class="nav-link" href="/warning"><i class="bi bi-exclamation-triangle"></i> 到期预警</a>
+      <a class="nav-link" href="/certificate"><i class="bi bi-file-pdf"></i> 证书管理</a>
+      <a class="nav-link active" href="/export"><i class="bi bi-download"></i> 数据导出</a>
+      <a class="nav-link text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出</a>
+    </nav>
+  </div>
+  <div class="main">
+    <h4 class="mb-4"><i class="bi bi-download"></i> 数据导出</h4>
+
+    <div class="row g-4">
+      <!-- 检定申请单 -->
+      <div class="col-md-6">
+        <div class="card export-card" onclick="exportApplication()">
+          <i class="bi bi-file-spreadsheet" style="color:#27ae60;"></i>
+          <h6>计量器具检定申请单</h6>
+          <p class="text-muted">导出即将到期的器具，生成检定申请格式</p>
+          <div class="d-flex gap-2 justify-content-center">
+            <select class="form-select" style="width:130px;" id="appDays" onclick="event.stopPropagation()">
+              <option value="15">提前15天</option>
+              <option value="30" selected>提前30天</option>
+              <option value="60">提前60天</option>
+            </select>
+            <button class="btn btn-success btn-sm" onclick="event.stopPropagation(); exportApplication()">导出</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 管理一览表 -->
+      <div class="col-md-6">
+        <div class="card export-card" onclick="exportSummary()">
+          <i class="bi bi-grid-3x3-gap" style="color:#2980b9;"></i>
+          <h6>计量器具管理一览表</h6>
+          <p class="text-muted">按类别分Sheet导出，每个Sheet按位置分组</p>
+          <div class="d-flex gap-2 justify-content-center">
+            <select class="form-select" style="width:180px;" id="summaryCat" onclick="event.stopPropagation()">
+              <option value="">全部类别</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); exportSummary()">导出</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 到期预警清单 -->
+      <div class="col-md-6">
+        <div class="card export-card" onclick="exportWarning()">
+          <i class="bi bi-exclamation-diamond" style="color:#f39c12;"></i>
+          <h6>到期预警清单</h6>
+          <p class="text-muted">导出即将到期器具明细，含剩余天数</p>
+          <div class="d-flex gap-2 justify-content-center">
+            <select class="form-select" style="width:130px;" id="warnDays" onclick="event.stopPropagation()">
+              <option value="30" selected>提前30天</option>
+              <option value="60">提前60天</option>
+              <option value="90">提前90天</option>
+            </select>
+            <button class="btn btn-warning btn-sm" onclick="event.stopPropagation(); exportWarning()">导出</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (!localStorage.getItem('token')) window.location.href = '/login';
+    const tok = localStorage.getItem('token');
+
+    async function loadCategories() {
+      const res = await fetch('/api/dashboard/categories', { headers: { 'Authorization': 'Bearer ' + tok } });
+      const data = await res.json();
+      if (data.code === 200) {
+        const sel = document.getElementById('summaryCat');
+        data.data.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); });
+      }
+    }
+
+    function exportApplication() {
+      const days = document.getElementById('appDays').value;
+      window.open('/api/export/verification-application?days=' + days + '&token=' + tok);
+    }
+    function exportSummary() {
+      const cat = document.getElementById('summaryCat').value;
+      window.open('/api/export/management-summary' + (cat ? '?category=' + encodeURIComponent(cat) + '&token=' + tok : '?token=' + tok));
+    }
+    function exportWarning() {
+      const days = document.getElementById('warnDays').value;
+      window.open('/api/export/warning?days=' + days + '&token=' + tok);
+    }
+    function logout() { localStorage.clear(); window.location.href = '/login'; }
+    loadCategories();
+  </script>
+</body>
+</html>

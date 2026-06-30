@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+uploads/*
+!uploads/.gitkeep
+server/uploads/*
+!server/uploads/.gitkeep
+data/metrology.db
+*.log
+.DS_Store
+.claude/

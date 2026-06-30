@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>仪表盘 - 计量器具管理系统</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6fa; }
+    .sidebar { background: #2c3e50; min-height: 100vh; color: white; padding: 20px 0; position: fixed; width: 220px; }
+    .sidebar h5 { padding: 10px 20px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; transition: .2s; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+    .main { margin-left: 220px; padding: 30px; }
+    .stat-card { background: white; border-radius: 10px; padding: 24px; box-shadow: 0 2px 10px rgba(0,0,0,.05); text-align: center; }
+    .stat-card .num { font-size: 36px; font-weight: 700; }
+    .stat-card .label { color: #888; font-size: 14px; margin-top: 4px; }
+    .stat-card.warn .num { color: #f39c12; }
+    .stat-card.danger .num { color: #e74c3c; }
+    .stat-card.primary .num { color: #3498db; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h5>📐 计量器具管理</h5>
+    <nav class="nav flex-column">
+      <a class="nav-link active" href="/"><i class="bi bi-speedometer2"></i> 仪表盘</a>
+      <a class="nav-link" href="/import"><i class="bi bi-upload"></i> 数据导入</a>
+      <a class="nav-link" href="/warning"><i class="bi bi-exclamation-triangle"></i> 到期预警</a>
+      <a class="nav-link" href="/certificate"><i class="bi bi-file-pdf"></i> 证书管理</a>
+      <a class="nav-link" href="/export"><i class="bi bi-download"></i> 数据导出</a>
+      <a class="nav-link text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出登录</a>
+    </nav>
+  </div>
+  <div class="main">
+    <h4 class="mb-4">仪表盘</h4>
+    <div class="row g-4" id="statsCards">
+      <div class="col-md-3"><div class="stat-card primary"><div class="num">--</div><div class="label">器具总数</div></div></div>
+      <div class="col-md-3"><div class="stat-card warn"><div class="num">--</div><div class="label">即将到期(30天)</div></div></div>
+      <div class="col-md-3"><div class="stat-card danger"><div class="num">--</div><div class="label">已过期</div></div></div>
+      <div class="col-md-3"><div class="stat-card"><div class="num">12</div><div class="label">类别数</div></div></div>
+    </div>
+    <div class="card mt-4">
+      <div class="card-header fw-bold">各类别器具数量</div>
+      <div class="card-body" id="categoryStats">
+        <p class="text-muted">加载中...</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (!localStorage.getItem('token')) window.location.href = '/login';
+
+    async function api(url) {
+      const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
+      if (res.status === 401) { localStorage.clear(); window.location.href = '/login'; return; }
+      return res.json();
+    }
+
+    async function load() {
+      const data = await api('/api/dashboard/stats');
+      if (!data) return;
+      document.getElementById('statsCards').innerHTML = `
+        <div class="col-md-3"><div class="stat-card primary"><div class="num">${data.data.totalCount}</div><div class="label">器具总数</div></div></div>
+        <div class="col-md-3"><div class="stat-card warn"><div class="num">${data.data.expiringSoon}</div><div class="label">即将到期(30天)</div></div></div>
+        <div class="col-md-3"><div class="stat-card danger"><div class="num">${data.data.expired}</div><div class="label">已过期</div></div></div>
+        <div class="col-md-3"><div class="stat-card"><div class="num">12</div><div class="label">类别数</div></div></div>
+      `;
+      const catHtml = data.data.byCategory.map(c =>
+        `<span class="badge bg-light text-dark me-2 mb-2 p-2">${c.category}: <strong>${c.count}</strong></span>`
+      ).join('');
+      document.getElementById('categoryStats').innerHTML = catHtml || '<p class="text-muted">暂无数据，请先导入台账</p>';
+    }
+
+    function logout() { localStorage.clear(); window.location.href = '/login'; }
+    load();
+  </script>
+</body>
+</html>

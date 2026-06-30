@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>证书管理</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6fa; }
+    .sidebar { background: #2c3e50; min-height: 100vh; color: white; padding: 20px 0; position: fixed; width: 220px; }
+    .sidebar h5 { padding: 10px 20px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+    .main { margin-left: 220px; padding: 30px; }
+    .card { border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+    .field-row { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+    .field-row label { min-width: 100px; font-weight: 500; text-align: right; }
+    .field-row input { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h5>📐 计量器具管理</h5>
+    <nav class="nav flex-column">
+      <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> 仪表盘</a>
+      <a class="nav-link" href="/import"><i class="bi bi-upload"></i> 数据导入</a>
+      <a class="nav-link" href="/warning"><i class="bi bi-exclamation-triangle"></i> 到期预警</a>
+      <a class="nav-link active" href="/certificate"><i class="bi bi-file-pdf"></i> 证书管理</a>
+      <a class="nav-link" href="/export"><i class="bi bi-download"></i> 数据导出</a>
+      <a class="nav-link text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出</a>
+    </nav>
+  </div>
+  <div class="main">
+    <h4 class="mb-4"><i class="bi bi-file-pdf"></i> 证书管理</h4>
+
+    <!-- 上传解析 -->
+    <div class="card p-4 mb-4">
+      <h6>1. 上传PDF检验证书</h6>
+      <p class="text-muted">自动识别证书编号、出厂编号、校准日期等信息</p>
+      <input type="file" id="pdfFile" accept=".pdf" class="form-control mb-3" style="max-width:400px;">
+      <button class="btn btn-primary" id="btnParse" disabled>解析证书</button>
+      <span id="parseStatus" class="ms-3"></span>
+    </div>
+
+    <!-- 解析结果 -->
+    <div id="parseResult" class="d-none">
+      <div class="card p-4 mb-4">
+        <h6>2. 解析结果</h6>
+        <div id="resultFields"></div>
+        <h6 class="mt-3">匹配到的数据库记录</h6>
+        <div id="matchedRecords" class="table-responsive"></div>
+        <button class="btn btn-success mt-3" id="btnSave" disabled>保存到数据库</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (!localStorage.getItem('token')) window.location.href = '/login';
+    const token = () => ({ 'Authorization': 'Bearer ' + localStorage.getItem('token') });
+    let certData = null;
+
+    document.getElementById('pdfFile').addEventListener('change', function() {
+      document.getElementById('btnParse').disabled = !this.files[0];
+    });
+
+    document.getElementById('btnParse').addEventListener('click', async () => {
+      const file = document.getElementById('pdfFile').files[0];
+      if (!file) return;
+      document.getElementById('parseStatus').innerHTML = '<span class="text-info">解析中...</span>';
+
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch('/api/certificate/parse', { method: 'POST', headers: token(), body: fd });
+      const data = await res.json();
+      if (data.code !== 200) {
+        document.getElementById('parseStatus').innerHTML = '<span class="text-danger">' + data.message + '</span>';
+        return;
+      }
+      certData = data.data;
+      document.getElementById('parseStatus').innerHTML = '<span class="text-success">解析完成</span>';
+      document.getElementById('parseResult').classList.remove('d-none');
+
+      // 显示字段
+      const labels = { certificate_no:'证书编号', equipment_name:'器具名称', model_spec:'型号规格', serial_no:'出厂编号', manufacturer:'制造单位', verification_date:'校准日期', verification_unit:'校准单位' };
+      let html = '<div class="row">';
+      for (const [k, v] of Object.entries(labels)) {
+        html += `<div class="col-md-6 field-row"><label>${v}:</label><input class="form-control form-control-sm" value="${certData[k]||''}" id="field_${k}"></div>`;
+      }
+      html += '</div>';
+      document.getElementById('resultFields').innerHTML = html;
+
+      // 匹配记录
+      if (certData.matchedInstruments && certData.matchedInstruments.length > 0) {
+        document.getElementById('matchedRecords').innerHTML = `
+          <table class="table table-sm table-bordered"><thead><tr><th>类别</th><th>位置</th><th>出厂编号</th><th>当前证书</th><th>当前效期</th></tr></thead><tbody>
+          ${certData.matchedInstruments.map(r => `<tr><td>${r.category}</td><td>${r.location||''}</td><td>${r.serial_no}</td><td>${r.certificate_no||''}</td><td>${r.expire_date||''}</td></tr>`).join('')}
+          </tbody></table>`;
+        document.getElementById('btnSave').disabled = false;
+      } else {
+        document.getElementById('matchedRecords').innerHTML = '<p class="text-warning">未找到匹配记录（出厂编号: ' + (certData.serial_no || '未识别') + '），将尝试自动匹配</p>';
+        document.getElementById('btnSave').disabled = !certData.serial_no;
+      }
+    });
+
+    document.getElementById('btnSave').addEventListener('click', async () => {
+      if (!certData) return;
+      const payload = {
+        serial_no: document.getElementById('field_serial_no')?.value || certData.serial_no,
+        certificate_no: document.getElementById('field_certificate_no')?.value || certData.certificate_no,
+        verification_date: document.getElementById('field_verification_date')?.value || certData.verification_date,
+        verification_unit: document.getElementById('field_verification_unit')?.value || certData.verification_unit,
+      };
+      const res = await fetch('/api/certificate/save', {
+        method: 'POST', headers: { ...token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      alert(data.message);
+      if (data.code === 200) window.location.reload();
+    });
+
+    function logout() { localStorage.clear(); window.location.href = '/login'; }
+  </script>
+</body>
+</html>

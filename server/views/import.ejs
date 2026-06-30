@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数据导入</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6fa; }
+    .sidebar { background: #2c3e50; min-height: 100vh; color: white; padding: 20px 0; position: fixed; width: 220px; }
+    .sidebar h5 { padding: 10px 20px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+    .main { margin-left: 220px; padding: 30px; }
+    .preview-box { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h5>📐 计量器具管理</h5>
+    <nav class="nav flex-column">
+      <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> 仪表盘</a>
+      <a class="nav-link active" href="/import"><i class="bi bi-upload"></i> 数据导入</a>
+      <a class="nav-link" href="/warning"><i class="bi bi-exclamation-triangle"></i> 到期预警</a>
+      <a class="nav-link" href="/certificate"><i class="bi bi-file-pdf"></i> 证书管理</a>
+      <a class="nav-link" href="/export"><i class="bi bi-download"></i> 数据导出</a>
+      <a class="nav-link text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出</a>
+    </nav>
+  </div>
+  <div class="main">
+    <h4 class="mb-4"><i class="bi bi-upload"></i> 数据导入</h4>
+    <div class="preview-box mb-4">
+      <h6>1. 上传计量器具台账总表</h6>
+      <p class="text-muted">支持 .xlsx 格式，自动识别13个工作表中的12个类别</p>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" class="form-control mb-3" style="max-width:400px;">
+      <button class="btn btn-primary" id="btnPreview" disabled>预览数据</button>
+      <span id="previewStatus" class="ms-3"></span>
+    </div>
+    <div id="previewArea"></div>
+  </div>
+
+  <script>
+    if (!localStorage.getItem('token')) window.location.href = '/login';
+    const token = () => ({ 'Authorization': 'Bearer ' + localStorage.getItem('token') });
+
+    let previewData = null;
+
+    document.getElementById('fileInput').addEventListener('change', function() {
+      document.getElementById('btnPreview').disabled = !this.files[0];
+    });
+
+    document.getElementById('btnPreview').addEventListener('click', async () => {
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return;
+      const statusEl = document.getElementById('previewStatus');
+      statusEl.innerHTML = '<span class="text-info">解析中...</span>';
+
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/import/preview', { method: 'POST', headers: token(), body: formData });
+      const data = await res.json();
+      if (data.code !== 200) { statusEl.innerHTML = '<span class="text-danger">' + data.message + '</span>'; return; }
+
+      previewData = data.data;
+      statusEl.innerHTML = '<span class="text-success">解析完成</span>';
+
+      let html = '<h6>2. 预览结果 - 选择要导入的Sheet</h6>';
+      for (const [name, sheet] of Object.entries(data.data.sheets)) {
+        const color = sheet.mapped ? 'success' : 'secondary';
+        html += `<div class="preview-box mb-2">
+          <label class="form-check-label d-flex justify-content-between">
+            <span><input type="checkbox" class="form-check-input sheet-check" value="${name}" ${sheet.mapped ? 'checked' : 'disabled'}>
+              <strong>${name}</strong> (${sheet.totalRows} 条) → ${sheet.mapped ? sheet.tableName : '<span class="text-danger">未识别</span>'}</span>
+          </label>`;
+        if (sheet.sample && sheet.sample.length > 0) {
+          html += '<table class="table table-sm table-bordered mt-2"><thead><tr>';
+          Object.keys(sheet.sample[0]).filter(k => k !== 'extra_fields').forEach(k => html += '<th>' + k + '</th>');
+          html += '</tr></thead><tbody>';
+          sheet.sample.forEach(row => {
+            html += '<tr>';
+            Object.entries(row).filter(([k]) => k !== 'extra_fields').forEach(([, v]) => html += '<td>' + (typeof v === 'object' ? JSON.stringify(v).substring(0, 50) : (v || '')) + '</td>');
+            html += '</tr>';
+          });
+          html += '</tbody></table>';
+        }
+        html += '</div>';
+      }
+      html += '<button class="btn btn-success mt-3" id="btnImport">执行导入</button>';
+      document.getElementById('previewArea').innerHTML = html;
+
+      document.getElementById('btnImport').addEventListener('click', async () => {
+        const selected = [...document.querySelectorAll('.sheet-check:checked')].map(cb => cb.value);
+        if (selected.length === 0) { alert('请至少选择一个Sheet'); return; }
+        if (!confirm(`确认导入 ${selected.length} 个Sheet的数据？`)) return;
+
+        const res2 = await fetch('/api/import/execute', {
+          method: 'POST',
+          headers: { ...token(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: previewData.filePath, sheets: selected }),
+        });
+        const result = await res2.json();
+        alert(result.message);
+        if (result.code === 200) window.location.reload();
+      });
+    });
+
+    function logout() { localStorage.clear(); window.location.href = '/login'; }
+  </script>
+</body>
+</html>

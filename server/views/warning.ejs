@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>到期预警</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6fa; }
+    .sidebar { background: #2c3e50; min-height: 100vh; color: white; padding: 20px 0; position: fixed; width: 220px; }
+    .sidebar h5 { padding: 10px 20px; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,.1); margin-bottom: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: white; background: rgba(255,255,255,.1); }
+    .main { margin-left: 220px; padding: 30px; }
+    .card { border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+    .expired { background: #ffeaea; }
+    .expiring { background: #fff8e1; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h5>📐 计量器具管理</h5>
+    <nav class="nav flex-column">
+      <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> 仪表盘</a>
+      <a class="nav-link" href="/import"><i class="bi bi-upload"></i> 数据导入</a>
+      <a class="nav-link active" href="/warning"><i class="bi bi-exclamation-triangle"></i> 到期预警</a>
+      <a class="nav-link" href="/certificate"><i class="bi bi-file-pdf"></i> 证书管理</a>
+      <a class="nav-link" href="/export"><i class="bi bi-download"></i> 数据导出</a>
+      <a class="nav-link text-danger" href="#" onclick="logout()"><i class="bi bi-box-arrow-right"></i> 退出</a>
+    </nav>
+  </div>
+  <div class="main">
+    <h4 class="mb-4"><i class="bi bi-exclamation-triangle"></i> 到期预警</h4>
+    <div class="card p-3 mb-3">
+      <div class="d-flex gap-2 align-items-center">
+        <label>提前天数:</label>
+        <select id="daysSelect" class="form-select" style="width:150px;">
+          <option value="15">15天</option>
+          <option value="30" selected>30天</option>
+          <option value="60">60天</option>
+          <option value="90">90天</option>
+        </select>
+        <button class="btn btn-primary" onclick="loadExpiring()">查询</button>
+        <button class="btn btn-warning ms-auto" onclick="exportWarning()"><i class="bi bi-download"></i> 导出预警清单</button>
+        <button class="btn btn-success" onclick="exportApplication()"><i class="bi bi-file-spreadsheet"></i> 导出检定申请单</button>
+      </div>
+    </div>
+    <div class="card p-3">
+      <div id="resultInfo" class="mb-2 text-muted"></div>
+      <div class="table-responsive">
+        <table class="table table-hover" id="expiringTable">
+          <thead><tr>
+            <th>类别</th><th>安装位置</th><th>规格型号</th><th>出厂编号</th><th>生产厂家</th>
+            <th>检验日期</th><th>有效日期</th><th>剩余天数</th><th>证书编号</th><th>状态</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (!localStorage.getItem('token')) window.location.href = '/login';
+    const token = () => ({ 'Authorization': 'Bearer ' + localStorage.getItem('token') });
+
+    async function loadExpiring() {
+      const days = document.getElementById('daysSelect').value;
+      const res = await fetch('/api/dashboard/expiring?days=' + days, { headers: token() });
+      const data = await res.json();
+      document.getElementById('resultInfo').textContent = `共 ${data.data.total} 条即将到期记录`;
+
+      const tbody = document.querySelector('#expiringTable tbody');
+      tbody.innerHTML = data.data.items.map(item => {
+        const expireDate = new Date(item.expire_date);
+        const remainDays = Math.ceil((expireDate - new Date()) / (1000*60*60*24));
+        const cls = remainDays < 0 ? 'expired' : 'expiring';
+        return `<tr class="${cls}">
+          <td><span class="badge bg-secondary">${item.category||''}</span></td>
+          <td>${item.location||''}</td><td>${item.model_spec||''}</td><td>${item.serial_no||''}</td>
+          <td>${item.manufacturer||''}</td><td>${item.verification_date||''}</td><td>${item.expire_date||''}</td>
+          <td><strong style="color:${remainDays<0?'red':remainDays<15?'#f39c12':'#333'}">${remainDays}</strong></td>
+          <td>${item.certificate_no||''}</td><td>${item.status||''}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="10" class="text-center text-success">暂无即将到期的器具 ✅</td></tr>';
+    }
+
+    function exportWarning() {
+      const days = document.getElementById('daysSelect').value;
+      window.open('/api/export/warning?days=' + days + '&token=' + localStorage.getItem('token'));
+    }
+    function exportApplication() {
+      const days = document.getElementById('daysSelect').value;
+      window.open('/api/export/verification-application?days=' + days + '&token=' + localStorage.getItem('token'));
+    }
+    function logout() { localStorage.clear(); window.location.href = '/login'; }
+    loadExpiring();
+  </script>
+</body>
+</html>
