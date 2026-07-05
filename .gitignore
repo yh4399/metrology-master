@@ -9,3 +9,11 @@ data/metrology.db
 *.log
 .DS_Store
 .claude/
+*.traineddata
+.idea/
+.vscode/
+*.swp
+*~
+Thumbs.db
+*.local
+build/
