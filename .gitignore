@@ -5,7 +5,7 @@ uploads/*
 !uploads/.gitkeep
 server/uploads/*
 !server/uploads/.gitkeep
-data/metrology.db
+data/
 *.log
 .DS_Store
 .claude/
