@@ -44,6 +44,24 @@ test('model records versions, restores versions, and manages recycle bin', () =>
   assert.equal(Instrument.listHistory(id).length, 0);
 });
 
+test('restoring an update history entry returns to the state before that change', () => {
+  const legacy = Instrument.create({
+    category: '压力表',
+    serial_number: 'LEGACY-RESTORE',
+    certificate_number: 'OLD'
+  });
+  const id = legacy.lastInsertId;
+
+  Instrument.updateWithHistory(id, { certificate_number: 'NEW' }, { source: 'manual_edit' });
+  const updateVersion = Instrument.listHistory(id)[0];
+  assert.equal(updateVersion.before_data.certificate_number, 'OLD');
+  assert.equal(updateVersion.after_data.certificate_number, 'NEW');
+
+  Instrument.restoreVersion(id, updateVersion.id, { operatorId: 1 });
+
+  assert.equal(Instrument.findById(id).certificate_number, 'OLD');
+});
+
 test('database transaction rolls back every write when a later step fails', () => {
   assert.throws(() => db.transaction(() => {
     db.run("INSERT INTO instruments (category, serial_number) VALUES ('压力表', 'ROLLBACK-ME')");

@@ -349,17 +349,21 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="certificate_number" label="证书编号" width="230">
+        <el-table-column prop="certificate_number" label="证书编号" width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <div class="certificate-cell">
-              <div class="certificate-main">
-                <span class="cert-number">{{ row.certificate_number || '-' }}</span>
-                <el-tag v-if="row.latest_change_at" type="success" size="small" class="updated-tag" @click.stop="openHistory(row)">已更新</el-tag>
-              </div>
-              <button v-if="row.latest_change_at" class="change-meta" type="button" @click.stop="openHistory(row)">
+            <span class="cert-number">{{ row.certificate_number || '-' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="变更信息" width="230">
+          <template #default="{ row }">
+            <div v-if="row.latest_change_at" class="change-info-cell">
+              <el-tag type="success" size="small" class="updated-tag" @click.stop="openHistory(row)">已更新</el-tag>
+              <button class="change-meta" type="button" @click.stop="openHistory(row)">
                 {{ formatDateTime(row.latest_change_at) }}<template v-if="row.latest_change_summary"> · {{ row.latest_change_summary }}</template>
               </button>
             </div>
+            <span v-else>-</span>
           </template>
         </el-table-column>
 
@@ -1399,9 +1403,7 @@ onMounted(async () => {
   color: var(--text-secondary);
 }
 
-.certificate-cell { min-width: 0; }
-.certificate-main { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.certificate-main .cert-number { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-info-cell { min-width: 0; }
 .updated-tag { flex-shrink: 0; cursor: pointer; }
 .change-meta { display: block; max-width: 100%; margin-top: 3px; padding: 0; border: 0; background: transparent; color: #16a34a; font: inherit; font-size: 11px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-meta:hover { text-decoration: underline; }

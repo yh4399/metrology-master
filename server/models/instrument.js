@@ -260,7 +260,9 @@ const Instrument = {
     if (!current) throw new Error('器具不存在或已在回收站');
     const version = History.findVersion(versionId);
     if (!version || Number(version.instrument_id) !== Number(id)) throw new Error('历史版本不属于该器具');
-    const snapshot = version.after_data;
+    const snapshot = version.action === 'create' || version.action === 'restore_deleted'
+      ? version.after_data
+      : (version.before_data || version.after_data);
     if (!snapshot) throw new Error('该版本没有可恢复的数据');
     const restoreData = Object.fromEntries(History.TRACKED_FIELDS.filter(field => Object.hasOwn(snapshot, field)).map(field => [field, snapshot[field]]));
     return transaction(() => {

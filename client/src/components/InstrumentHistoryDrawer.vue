@@ -28,7 +28,7 @@
                 link
                 :loading="restoringId === version.id"
                 @click="restoreVersion(version)"
-              >恢复到此版本</el-button>
+              >{{ restoreButtonLabel(version) }}</el-button>
             </div>
             <div v-if="showsFieldDiff(version) && diffOf(version).length" class="change-list">
               <div v-for="(change, index) in diffOf(version)" :key="change.field || index" class="change-row">
@@ -70,6 +70,8 @@ function actionLabel(action) {
   return ({ create: '新增器具', update: '修改器具', delete: '删除器具', restore_version: '恢复版本', restore_deleted: '恢复删除' })[action] || action || '修改器具'
 }
 function canRestore(version) { return !['delete'].includes(version.action) && (version.after_data || version.after_snapshot || version.snapshot) }
+function restoresBeforeChange(version) { return ['update', 'restore_version'].includes(version.action) }
+function restoreButtonLabel(version) { return restoresBeforeChange(version) ? '恢复到修改前' : '恢复到此版本' }
 
 async function loadHistory() {
   if (!props.instrument?.id) return
@@ -91,7 +93,8 @@ watch(() => [props.modelValue, props.instrument?.id], ([visible]) => {
 
 async function restoreVersion(version) {
   try {
-    await ElMessageBox.confirm('确定将器具恢复到这个历史版本吗？当前状态也会作为一条新历史保留。', '恢复历史版本', { type: 'warning' })
+    const target = restoresBeforeChange(version) ? '该次修改前的状态' : '这个历史版本'
+    await ElMessageBox.confirm(`确定将器具恢复到${target}吗？当前状态也会作为一条新历史保留。`, '恢复历史版本', { type: 'warning' })
     restoringId.value = version.id
     await restoreInstrumentVersion(props.instrument.id, version.id)
     ElMessage.success('已恢复到所选版本')
