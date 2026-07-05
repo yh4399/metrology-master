@@ -2,9 +2,10 @@ const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, '..', '..', 'data', 'metrology.db');
+const DB_PATH = process.env.METROLOGY_DB_PATH || path.join(__dirname, '..', '..', 'data', 'metrology.db');
 
 let db = null;
+let transactionDepth = 0;
 
 function createAllTables(database) {
   // 用户表
@@ -53,6 +54,28 @@ function createAllTables(database) {
     updated_at            TEXT    DEFAULT (datetime('now','localtime'))
   )`);
 
+  const instrumentColumns = new Set(queryTableColumns(database, 'instruments'));
+  const migrations = [
+    ['is_deleted', 'INTEGER DEFAULT 0'], ['deleted_at', 'TEXT'],
+    ['latest_change_at', 'TEXT'], ['latest_change_summary', 'TEXT']
+  ];
+  for (const [column, definition] of migrations) {
+    if (!instrumentColumns.has(column)) database.run(`ALTER TABLE instruments ADD COLUMN ${column} ${definition}`);
+  }
+
+  database.run(`CREATE TABLE IF NOT EXISTS instrument_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    source TEXT,
+    operator_id INTEGER,
+    before_data TEXT,
+    after_data TEXT,
+    diff_data TEXT,
+    summary TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
   // 索引
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_category    ON instruments(category)');
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_serial       ON instruments(serial_number)');
@@ -60,6 +83,16 @@ function createAllTables(database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_location     ON instruments(installation_location)');
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_status       ON instruments(status)');
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_valid_until  ON instruments(valid_until)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_ins_deleted ON instruments(is_deleted)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_versions_instrument ON instrument_versions(instrument_id)');
+  database.run('CREATE INDEX IF NOT EXISTS idx_versions_created ON instrument_versions(created_at)');
+}
+
+function queryTableColumns(database, table) {
+  const result = database.exec(`PRAGMA table_info(${table})`);
+  if (!result.length) return [];
+  const nameIndex = result[0].columns.indexOf('name');
+  return result[0].values.map(row => row[nameIndex]);
 }
 
 async function getDb() {
@@ -115,11 +148,32 @@ function queryOne(sql, params = []) {
 function run(sql, params = []) {
   if (!db) throw new Error('数据库未初始化');
   db.run(sql, params);
-  saveDb();
+  const changes = db.getRowsModified();
+  const lastInsertId = queryOne('SELECT last_insert_rowid() as id')?.id || 0;
+  if (transactionDepth === 0) saveDb();
   return {
-    changes: db.getRowsModified(),
-    lastInsertId: queryOne('SELECT last_insert_rowid() as id')?.id || 0,
+    changes,
+    lastInsertId,
   };
 }
 
-module.exports = { getDb, saveDb, queryAll, queryOne, run };
+function transaction(work) {
+  if (!db) throw new Error('数据库未初始化');
+  if (transactionDepth > 0) return work();
+  db.run('BEGIN TRANSACTION');
+  transactionDepth++;
+  try {
+    const result = work();
+    db.run('COMMIT');
+    transactionDepth--;
+    saveDb();
+    return result;
+  } catch (error) {
+    db.run('ROLLBACK');
+    transactionDepth--;
+    saveDb();
+    throw error;
+  }
+}
+
+module.exports = { getDb, saveDb, queryAll, queryOne, run, transaction };

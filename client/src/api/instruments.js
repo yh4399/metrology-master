@@ -30,6 +30,26 @@ export function deleteInstrument(id) {
   return request.delete('/instruments/' + id)
 }
 
+export function getInstrumentHistory(id) {
+  return request.get(`/instruments/${id}/history`)
+}
+
+export function restoreInstrumentVersion(id, versionId) {
+  return request.post(`/instruments/${id}/history/${versionId}/restore`)
+}
+
+export function getRecycleBin(params) {
+  return request.get('/instruments/recycle-bin/list', { params })
+}
+
+export function restoreDeletedInstrument(id) {
+  return request.post(`/instruments/recycle-bin/${id}/restore`)
+}
+
+export function purgeDeletedInstrument(id) {
+  return request.delete(`/instruments/recycle-bin/${id}/purge`)
+}
+
 // 导出使用原始 axios（blob 响应，不进拦截器 JSON 检查）
 export async function exportInstruments(params) {
   const authStore = useAuthStore()

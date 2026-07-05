@@ -568,25 +568,331 @@ function normalizeDate(val) {
   return null;
 }
 
-// 导出表头定义
-const EXPORT_HEADERS = [
-  { key: 'category',              label: '器具类别',  width: 14 },
-  { key: 'serial_number',         label: '出厂编号',  width: 18 },
-  { key: 'model',                 label: '型号',      width: 14 },
-  { key: 'manufacturer',          label: '生产厂家',  width: 20 },
-  { key: 'range_min',             label: '量程下限',  width: 12 },
-  { key: 'range_max',             label: '量程上限',  width: 12 },
-  { key: 'range_unit',            label: '单位',      width: 8  },
-  { key: 'accuracy_class',        label: '准确度等级',width: 12 },
-  { key: 'installation_location', label: '安装位置',  width: 20 },
-  { key: 'department',            label: '所属部门',  width: 14 },
-  { key: 'certificate_number',    label: '证书编号',  width: 22 },
-  { key: 'inspection_date',       label: '检验日期',  width: 12 },
-  { key: 'valid_until',           label: '有效日期',  width: 12 },
-  { key: 'inspection_result',     label: '检验结果',  width: 10 },
-  { key: 'inspection_unit',       label: '检定单位',  width: 22 },
-  { key: 'status',                label: '状态',      width: 8  },
-  { key: 'remark',                label: '备注',      width: 20 },
+// ========== 导出 Sheet 配置（与模板一一对应） ==========
+// 每个 Sheet 定义：标题行、列映射、匹配的 DB category 值
+
+/**
+ * 从 DB 行记录中提取值，优先 direct field，其次 extra_fields JSON
+ */
+function extractValue(row, colDef) {
+  const { field, extraKey } = colDef;
+
+  // 直接 DB 字段
+  if (field && field !== 'range_display' && field !== 'formula' && field !== 'extra') {
+    return row[field] !== null && row[field] !== undefined ? row[field] : '';
+  }
+
+  // 量程拼接: range_min ~ range_max [range_unit]
+  if (field === 'range_display') {
+    const min = row.range_min != null ? row.range_min : '';
+    const max = row.range_max != null ? row.range_max : '';
+    const unit = (colDef.unit || row.range_unit || '');
+    if (min === '' && max === '') return '';
+    return `${min}-${max}` + (unit ? ` ${unit}` : '');
+  }
+
+  // 从 extra_fields JSON 提取
+  if (extraKey) {
+    if (row.extra_fields) {
+      try {
+        const extra = typeof row.extra_fields === 'string' ? JSON.parse(row.extra_fields) : row.extra_fields;
+        const val = extra[extraKey];
+        if (val !== undefined && val !== null) return val;
+      } catch (e) { /* ignore */ }
+    }
+    return '';
+  }
+
+  return '';
+}
+
+/**
+ * 格式化日期: YYYY.MM.DD
+ */
+function fmtExportDate(val) {
+  if (!val) return '';
+  const s = String(val).slice(0, 10);
+  return s.replace(/-/g, '.');
+}
+
+/**
+ * 获取分类字段值（从 extra_fields.classification 或直接字段）
+ */
+function getClassification(row) {
+  if (row.extra_fields) {
+    try {
+      const extra = typeof row.extra_fields === 'string' ? JSON.parse(row.extra_fields) : row.extra_fields;
+      if (extra.classification) return extra.classification;
+    } catch (e) { /* ignore */ }
+  }
+  return '';
+}
+
+const EXPORT_SHEET_CONFIGS = [
+  // ====== Sheet 1: 压变（压力变送器） ======
+  {
+    name: '压变',
+    title: '海一采油管理区压力变送器台帐',
+    categories: ['压力变送器'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 24 },
+      { label: '规格型号', field: 'model', width: 30 },
+      { label: '生产厂家', field: 'manufacturer', width: 22 },
+      { label: '量程（MPa）', field: 'range_display', unit: 'MPa', width: 14 },
+      { label: '出厂编号', field: 'serial_number', width: 18 },
+      { label: '出厂日期', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '检验时间', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '有效期', field: 'valid_until', type: 'date', width: 12 },
+      { label: '仪表检定证书编号', field: 'certificate_number', width: 28 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 2: 温变（温度变送器） ======
+  {
+    name: '温变',
+    title: '海一采油管理区温度变送器台帐',
+    categories: ['温度变送器'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 24 },
+      { label: '规格型号', field: 'model', width: 30 },
+      { label: '生产厂家', field: 'manufacturer', width: 22 },
+      { label: '量程（℃）', field: 'range_display', unit: '℃', width: 14 },
+      { label: '序列号', field: 'serial_number', width: 18 },
+      { label: '出厂日期', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '检定时间', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '有效期', field: 'valid_until', type: 'date', width: 12 },
+      { label: '仪表检定证书编号', field: 'certificate_number', width: 28 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 3: 压力表 ======
+  {
+    name: '压力表',
+    title: '中心一号平台压力表台账',
+    categories: ['普通压力表', '耐震压力表', '电接点压力表', '真空表', '压力表'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 26 },
+      { label: '安装后压力表编号', field: 'serial_number', width: 18 },
+      { label: '量程（MPa）', field: 'range_display', unit: 'MPa', width: 14 },
+      { label: '厂家', field: 'manufacturer', width: 14 },
+      { label: '精度', field: 'accuracy_class', width: 8 },
+      { label: '型号', field: 'model', width: 12 },
+      { label: '检验时间', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '到期时间', field: 'valid_until', type: 'date', width: 12 },
+      { label: '压力表类别', field: 'extra', extraKey: 'pressure_gauge_type', width: 14 },
+      { label: '分类管理', field: 'extra', extraKey: 'classification', width: 10 },
+      { label: '证书编号', field: 'certificate_number', width: 30 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 4: 温度表（表盘式温度计） ======
+  {
+    name: '温度表',
+    title: '中心一号平台表盘式温度计统计台账',
+    categories: ['温度计', '双金属温度计'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '位置', field: 'installation_location', width: 30 },
+      { label: '量程(℃)', field: 'range_display', unit: '℃', width: 12 },
+      { label: '精度', field: 'accuracy_class', width: 8 },
+      { label: '编号', field: 'serial_number', width: 16 },
+      { label: '检验时间', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '到期时间', field: 'valid_until', type: 'date', width: 12 },
+      { label: '厂家', field: 'manufacturer', width: 16 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '证书编号', field: 'certificate_number', width: 30 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 5: 电磁流量计 ======
+  {
+    name: '电磁流量计',
+    title: '中心一电磁流量计台账',
+    categories: ['电磁流量计'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 24 },
+      { label: '型号', field: 'model', width: 30 },
+      { label: '防护等级', field: 'extra', extraKey: '防护等级', width: 10 },
+      { label: '公称通径', field: 'extra', extraKey: '公称通径', width: 10 },
+      { label: '编号', field: 'serial_number', width: 14 },
+      { label: '公称压力', field: 'extra', extraKey: '公称压力', width: 12 },
+      { label: '测量范围', field: 'range_display', width: 16 },
+      { label: '仪表精度', field: 'accuracy_class', width: 10 },
+      { label: '电极材质', field: 'extra', extraKey: '电极材质', width: 10 },
+      { label: '防爆等级', field: 'extra', extraKey: '防爆等级', width: 18 },
+      { label: '供电电压', field: 'extra', extraKey: '供电电压', width: 12 },
+      { label: '制造日期', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '检定日期', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '到期时间', field: 'valid_until', type: 'date', width: 12 },
+      { label: '输出', field: 'extra', extraKey: '输出', width: 14 },
+      { label: '厂家', field: 'manufacturer', width: 22 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '证书编号', field: 'certificate_number', width: 24 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 6: 质量流量计 ======
+  {
+    name: '质量流量计',
+    title: '海一采油管理区质量流量计台帐',
+    categories: ['质量流量计'],
+    columns: [
+      { label: '单位', field: 'department', width: 26 },
+      { label: '计量器具名称', field: 'category', width: 16 },
+      { label: '物料名称(铭牌)', field: 'extra', extraKey: '物料名称', width: 16 },
+      { label: '规格型号', field: 'model', width: 24 },
+      { label: '准确度等级', field: 'accuracy_class', width: 12 },
+      { label: '铭牌标注测量范围', field: 'range_display', width: 20 },
+      { label: '生产厂家', field: 'manufacturer', width: 24 },
+      { label: '启用日期', field: 'extra', extraKey: '启用日期', type: 'date', width: 14 },
+      { label: '出厂编号', field: 'serial_number', width: 16 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '检定日期', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '到期时间', field: 'valid_until', type: 'date', width: 12 },
+      { label: '证书编号', field: 'certificate_number', width: 24 },
+      { label: '检验单位', field: 'inspection_unit', width: 28 },
+    ],
+  },
+
+  // ====== Sheet 7: 液位计 ======
+  {
+    name: '液位计',
+    title: '中心一号平台液位计台帐',
+    categories: ['液位计'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 30 },
+      { label: '液位计类型', field: 'extra', extraKey: '液位计类型', width: 16 },
+      { label: '规格型号', field: 'model', width: 36 },
+      { label: '自用编号', field: 'serial_number', width: 15 },
+      { label: '生产厂家', field: 'manufacturer', width: 28 },
+      { label: '量程（mm）', field: 'range_display', unit: 'mm', width: 14 },
+      { label: '生产日期', field: 'mfg_date', type: 'date', width: 12 },
+    ],
+  },
+
+  // ====== Sheet 8: 双转子流量计 ======
+  {
+    name: '双转子流量计',
+    title: '', // 模板中无双转子标题行（row 1 为空），导出时跳过标题行
+    categories: ['双转子流量计'],
+    noTitleRow: true,
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '位置', field: 'installation_location', width: 24 },
+      { label: '型号', field: 'model', width: 26 },
+      { label: '公称通径', field: 'extra', extraKey: '公称通径', width: 10 },
+      { label: '测量范围', field: 'range_display', width: 16 },
+      { label: '准确度等级', field: 'accuracy_class', width: 12 },
+      { label: '介质温度', field: 'extra', extraKey: '介质温度', width: 10 },
+      { label: '公称压力', field: 'extra', extraKey: '公称压力', width: 12 },
+      { label: '环境温度', field: 'extra', extraKey: '环境温度', width: 10 },
+      { label: '出厂编号', field: 'serial_number', width: 16 },
+      { label: '制造年月', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '防护等级', field: 'extra', extraKey: '防护等级', width: 10 },
+      { label: '防爆证号', field: 'extra', extraKey: '防爆证号', width: 20 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+      { label: '仪表位号', field: 'extra', extraKey: '仪表位号', width: 12 },
+      { label: '厂家', field: 'manufacturer', width: 22 },
+      { label: '证书编号', field: 'certificate_number', width: 22 },
+      { label: '检验单位', field: 'inspection_unit', width: 26 },
+    ],
+  },
+
+  // ====== Sheet 9: 液位开关 ======
+  {
+    name: '液位开关',
+    title: '海一采油管理区液位开关台帐',
+    categories: ['压力开关', '温度开关', '液位开关'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 30 },
+      { label: '规格型号', field: 'model', width: 24 },
+      { label: '生产厂家', field: 'manufacturer', width: 26 },
+      { label: '安装高度（mm）', field: 'extra', extraKey: '安装高度', width: 16 },
+      { label: '电源', field: 'extra', extraKey: '电源', width: 10 },
+      { label: '防爆等级', field: 'extra', extraKey: '防爆等级', width: 14 },
+      { label: '防护等级', field: 'extra', extraKey: '防护等级', width: 10 },
+      { label: '生产日期', field: 'mfg_date', type: 'date', width: 12 },
+    ],
+  },
+
+  // ====== Sheet 10: 油水界面 ======
+  {
+    name: '油水界面',
+    title: '海一采油管理区油水界面台帐',
+    categories: ['油水界面'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 30 },
+      { label: '规格型号', field: 'model', width: 24 },
+      { label: '生产厂家', field: 'manufacturer', width: 26 },
+      { label: '插入深度（mm）', field: 'extra', extraKey: '插入深度', width: 16 },
+      { label: '输出电流', field: 'extra', extraKey: '输出电流', width: 12 },
+      { label: '生产日期', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '防护等级', field: 'extra', extraKey: '防护等级', width: 10 },
+      { label: '防爆等级', field: 'extra', extraKey: '防爆等级', width: 14 },
+      { label: '仪表检定证书编号', field: 'certificate_number', width: 28 },
+    ],
+  },
+
+  // ====== Sheet 11: 涡轮流量计 ======
+  {
+    name: '涡轮流量计',
+    title: '中心一涡轮流量计台账',
+    categories: ['涡轮流量计'],
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '安装位置', field: 'installation_location', width: 24 },
+      { label: '型号', field: 'model', width: 30 },
+      { label: '公称通径', field: 'extra', extraKey: '公称通径', width: 10 },
+      { label: '编号', field: 'serial_number', width: 14 },
+      { label: '公称压力', field: 'extra', extraKey: '公称压力', width: 12 },
+      { label: '测量范围', field: 'range_display', width: 16 },
+      { label: '仪表精度', field: 'accuracy_class', width: 10 },
+      { label: '厂家', field: 'manufacturer', width: 20 },
+      { label: '校准日期', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '分类', field: 'extra', extraKey: 'classification', width: 8 },
+    ],
+  },
+
+  // ====== Sheet 12: 金属管浮子流量计 ======
+  {
+    name: '金属管浮子流量计',
+    title: '', // 模板中无标题行
+    categories: ['金属管浮子流量计'],
+    noTitleRow: true,
+    columns: [
+      { label: '序号', field: 'formula' },
+      { label: '位置', field: 'installation_location', width: 20 },
+      { label: '型号', field: 'model', width: 16 },
+      { label: '流量范围', field: 'range_display', width: 14 },
+      { label: '环境温度', field: 'extra', extraKey: '环境温度', width: 12 },
+      { label: '精度等级', field: 'accuracy_class', width: 10 },
+      { label: '工作温度', field: 'extra', extraKey: '工作温度', width: 10 },
+      { label: '防护等级', field: 'extra', extraKey: '防护等级', width: 10 },
+      { label: '制造年月', field: 'mfg_date', type: 'date', width: 12 },
+      { label: '出厂编号', field: 'serial_number', width: 16 },
+      { label: '校准日期', field: 'inspection_date', type: 'date', width: 12 },
+      { label: '管理分类', field: 'extra', extraKey: 'classification', width: 10 },
+    ],
+  },
 ];
 
-module.exports = { parseFile, parseSheetData, applyMapping, EXPORT_HEADERS };
+// 旧版导出表头（保留兼容）
+const EXPORT_HEADERS = EXPORT_SHEET_CONFIGS[0]?.columns
+  .filter(c => c.field !== 'formula')
+  .map(c => ({ key: c.field, label: c.label, width: c.width || 14 })) || [];
+
+module.exports = { parseFile, parseSheetData, applyMapping, EXPORT_HEADERS, EXPORT_SHEET_CONFIGS, extractValue, fmtExportDate, getClassification };

@@ -76,6 +76,9 @@
           <el-button type="success" plain @click="batchCertVisible = true" style="flex-shrink:0">
             <el-icon><UploadFilled /></el-icon> 批量上传证书
           </el-button>
+          <el-button plain @click="recycleBinVisible = true" style="flex-shrink:0">
+            <el-icon><Delete /></el-icon> 回收站
+          </el-button>
           <el-dropdown trigger="click" @command="handleClearCommand" style="flex-shrink:0">
             <el-button type="danger" plain>
               <el-icon><Delete /></el-icon> 清空数据 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -204,13 +207,13 @@
           :accept="'.pdf'"
           multiple
           drag
-          :limit="50"
+          :limit="200"
         >
           <template #default>
             <div class="upload-drag-area">
               <el-icon :size="48" color="#409EFF"><UploadFilled /></el-icon>
               <p>将PDF证书拖拽到此处，或<em>点击选择文件</em></p>
-              <p class="upload-hint">支持同时选择多个PDF文件，最多50个</p>
+              <p class="upload-hint">支持同时选择多个PDF文件，最多200个</p>
             </div>
           </template>
         </el-upload>
@@ -346,9 +349,17 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="certificate_number" label="证书编号" width="160" show-overflow-tooltip>
+        <el-table-column prop="certificate_number" label="证书编号" width="230">
           <template #default="{ row }">
-            <span class="cert-number">{{ row.certificate_number || '-' }}</span>
+            <div class="certificate-cell">
+              <div class="certificate-main">
+                <span class="cert-number">{{ row.certificate_number || '-' }}</span>
+                <el-tag v-if="row.latest_change_at" type="success" size="small" class="updated-tag" @click.stop="openHistory(row)">已更新</el-tag>
+              </div>
+              <button v-if="row.latest_change_at" class="change-meta" type="button" @click.stop="openHistory(row)">
+                {{ formatDateTime(row.latest_change_at) }}<template v-if="row.latest_change_summary"> · {{ row.latest_change_summary }}</template>
+              </button>
+            </div>
           </template>
         </el-table-column>
 
@@ -517,7 +528,7 @@
         <el-pagination
           v-model:current-page="pagination.page"
           v-model:page-size="pagination.pageSize"
-          :page-sizes="[10, 20, 30, 50, 100]"
+          :page-sizes="[10, 20, 30, 50, 100, 200, 400]"
           :total="pagination.total"
           layout="total, sizes, prev, pager, next, jumper"
           background
@@ -555,6 +566,9 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <InstrumentHistoryDrawer v-model="historyVisible" :instrument="historyInstrument" @restored="fetchList" />
+    <InstrumentRecycleBin v-model="recycleBinVisible" @restored="fetchList" />
   </div>
 </template>
 
@@ -568,6 +582,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats } from '../api/instruments'
 import { STATUS_OPTIONS, STATUS_MAP, CATEGORIES, getCategoryColor } from '../utils/constants'
 import { useAuthStore } from '../stores/auth'
+import InstrumentHistoryDrawer from '../components/InstrumentHistoryDrawer.vue'
+import InstrumentRecycleBin from '../components/InstrumentRecycleBin.vue'
 
 const route = useRoute()
 const authStore = useAuthStore()
@@ -585,6 +601,9 @@ const denseMode = ref(false)
 const selectedRows = ref([])
 const selectAllMode = ref(false)
 const tableRef = ref(null)
+const historyVisible = ref(false)
+const historyInstrument = ref(null)
+const recycleBinVisible = ref(false)
 
 // === 批量上传证书 ===
 const batchCertVisible = ref(false)
@@ -645,6 +664,18 @@ function formatRange(row) {
 function formatDate(date) {
   if (!date) return ''
   return String(date).slice(0, 10)
+}
+
+function formatDateTime(value) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+  })
+}
+
+function openHistory(row) {
+  historyInstrument.value = row
+  historyVisible.value = true
 }
 
 function getValidTagType(validUntil) {
@@ -737,6 +768,10 @@ async function fetchList() {
     const res = await getInstruments(params)
     tableData.value = res.data.list
     pagination.total = res.data.total
+    if (tableData.value.length === 0 && pagination.page > 1 && pagination.total > 0) {
+      pagination.page--
+      return fetchList()
+    }
   } catch (err) {
     // handled
   } finally {
@@ -1363,6 +1398,13 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+.certificate-cell { min-width: 0; }
+.certificate-main { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.certificate-main .cert-number { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.updated-tag { flex-shrink: 0; cursor: pointer; }
+.change-meta { display: block; max-width: 100%; margin-top: 3px; padding: 0; border: 0; background: transparent; color: #16a34a; font: inherit; font-size: 11px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-meta:hover { text-decoration: underline; }
 
 .no-photo {
   width: 40px;

@@ -103,10 +103,14 @@ router.get('/', async (req, res) => {
 // ⚠️ 必须在 DELETE /:id 之前注册，否则 "clear-all" 会被当作 :id 匹配
 router.delete('/clear-all', async (req, res) => {
   try {
-    const countRow = require('../models/db').queryAll('SELECT COUNT(*) as cnt FROM instruments')[0];
+    const database = require('../models/db');
+    const countRow = database.queryAll('SELECT COUNT(*) as cnt FROM instruments')[0];
     const count = countRow ? countRow.cnt : 0;
-    require('../models/db').run('DELETE FROM instruments');
-    require('../models/db').run('DELETE FROM import_logs');
+    database.transaction(() => {
+      database.run('DELETE FROM instrument_versions');
+      database.run('DELETE FROM instruments');
+      database.run('DELETE FROM import_logs');
+    });
     res.json({ code: 200, message: '已清空全部数据', data: { deleted: count } });
   } catch (err) {
     console.error('清空数据错误:', err);
@@ -135,6 +139,7 @@ router.delete('/clear-by-category', async (req, res) => {
 });
 
 // ============ GET /api/instruments/export ============
+// 按模板格式导出：按类别分Sheet，列标题和顺序与模板一致
 // 支持参数: ids (逗号分隔的ID列表), category, keyword, status, validFrom, validTo
 router.get('/export', async (req, res) => {
   try {
@@ -146,57 +151,191 @@ router.get('/export', async (req, res) => {
       rows = await Instrument.findAll(req.query);
     }
 
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('计量器具台账');
+    const { EXPORT_SHEET_CONFIGS, extractValue, fmtExportDate } = excelService;
 
-    // 写入表头
-    const headerRow = sheet.addRow(excelService.EXPORT_HEADERS.map(h => h.label));
-    headerRow.eachCell(cell => {
-      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+    // 按 category 分组（同时记录到配置的类别组）
+    const categoryGroups = {};
+    const unmatchedRows = [];
+
+    for (const row of rows) {
+      const cat = row.category || '';
+      // 查找匹配的 sheet 配置
+      let matchedSheet = null;
+      for (const cfg of EXPORT_SHEET_CONFIGS) {
+        if (cfg.categories.includes(cat)) {
+          matchedSheet = cfg;
+          break;
+        }
+      }
+      if (matchedSheet) {
+        if (!categoryGroups[matchedSheet.name]) categoryGroups[matchedSheet.name] = [];
+        categoryGroups[matchedSheet.name].push(row);
+      } else if (cat) {
+        unmatchedRows.push(row);
+      }
+    }
+
+    const workbook = new ExcelJS.Workbook();
+
+    // 辅助：创建通用表格样式
+    const applyHeaderStyle = (cell) => {
+      cell.font = { bold: true, size: 11, name: '宋体', color: { argb: 'FFFFFFFF' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
-      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       cell.border = {
         top: { style: 'thin' }, left: { style: 'thin' },
         bottom: { style: 'thin' }, right: { style: 'thin' }
       };
-    });
-
-    excelService.EXPORT_HEADERS.forEach((h, i) => {
-      sheet.getColumn(i + 1).width = h.width;
-    });
-
-    const statusLabel = {
-      active: '在用', scrapped: '报废', borrowed: '借出', maintenance: '维修'
     };
 
-    for (const row of rows) {
-      const dataRow = sheet.addRow(excelService.EXPORT_HEADERS.map(h => {
-        let val = row[h.key];
-        if (h.key === 'status') val = statusLabel[val] || val;
-        if ((h.key === 'inspection_date' || h.key === 'valid_until') && val) {
-          return String(val).slice(0, 10);
+    const applyDataStyle = (cell, isCenter) => {
+      cell.font = { size: 10, name: '宋体' };
+      cell.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' }
+      };
+      cell.alignment = {
+        horizontal: isCenter ? 'center' : 'left',
+        vertical: 'middle',
+        wrapText: true
+      };
+    };
+
+    // 遍历所有 sheet 配置（包括空类别，保留空表）
+    for (const cfg of EXPORT_SHEET_CONFIGS) {
+      const sheetRows = categoryGroups[cfg.name] || [];
+      const colCount = cfg.columns.length;
+
+      const sheet = workbook.addWorksheet(cfg.name);
+      let currentRow = 1;
+
+      // === 标题行（第1行，合并单元格） ===
+      if (!cfg.noTitleRow) {
+        const titleRow = sheet.addRow(Array(colCount).fill(cfg.title));
+        sheet.mergeCells(1, 1, 1, colCount);
+        const titleCell = titleRow.getCell(1);
+        titleCell.font = { bold: true, size: 14, name: '宋体' };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleRow.height = 30;
+        currentRow++;
+      }
+
+      // === 表头行 ===
+      const headerRow = sheet.addRow(cfg.columns.map(c => c.label));
+      headerRow.eachCell(applyHeaderStyle);
+      headerRow.height = 32;
+      const headerRowNum = currentRow;
+      currentRow++;
+
+      // === 设置列宽 ===
+      cfg.columns.forEach((col, i) => {
+        if (col.width) {
+          sheet.getColumn(i + 1).width = col.width;
         }
-        return val !== null && val !== undefined ? val : '';
-      }));
-      dataRow.eachCell(cell => {
-        cell.border = {
-          top: { style: 'thin' }, left: { style: 'thin' },
-          bottom: { style: 'thin' }, right: { style: 'thin' }
-        };
-        cell.alignment = { vertical: 'middle' };
       });
+
+      // === 数据行 ===
+      for (let i = 0; i < sheetRows.length; i++) {
+        const row = sheetRows[i];
+        const values = cfg.columns.map((col) => {
+          if (col.field === 'formula') {
+            // 序号列：公式 =ROW()-2（模板风格）
+            return null; // 后面用公式填充
+          }
+          let val = extractValue(row, col);
+          if (col.type === 'date') {
+            return fmtExportDate(val);
+          }
+          return val !== null && val !== undefined ? val : '';
+        });
+
+        const dataRow = sheet.addRow(values);
+
+        // 序号列：1-based 序号
+        const seqCell = dataRow.getCell(1);
+        if (cfg.columns[0].field === 'formula') {
+          seqCell.value = i + 1;
+          seqCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+
+        dataRow.eachCell((cell, colNum) => {
+          // 序号列居中，其余左对齐
+          applyDataStyle(cell, colNum === 1);
+        });
+        dataRow.height = 28;
+      }
+
+      // 如果没有数据行，保留空表头
+      if (sheetRows.length === 0) {
+        // 空表：仍保留标题和表头
+      }
+
+      // === 冻结表头 ===
+      if (!cfg.noTitleRow) {
+        sheet.views = [{ state: 'frozen', ySplit: 2 }];
+      } else {
+        sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      }
+
+      // === 打印设置 ===
+      sheet.pageSetup = {
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        paperSize: 9 // A4
+      };
     }
 
-    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+    // 如果有未匹配到任何 sheet 的类别数据，追加一个通用 Sheet
+    if (unmatchedRows.length > 0) {
+      const sheet = workbook.addWorksheet('其他类别');
 
-    const filename = `计量器具台账_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const titleRow = sheet.addRow(['未匹配模板的仪表数据']);
+      sheet.mergeCells(1, 1, 1, 17);
+      titleRow.getCell(1).font = { bold: true, size: 14, name: '宋体' };
+      titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+
+      const genericHeaders = ['序号', '器具类别', '出厂编号', '型号', '生产厂家', '安装位置', '量程下限', '量程上限', '单位',
+        '准确度等级', '证书编号', '检验日期', '有效日期', '检验单位', '状态', '所属部门', '备注'];
+      const headerRow = sheet.addRow(genericHeaders);
+      headerRow.eachCell(applyHeaderStyle);
+
+      const statusLabel = {
+        active: '在用', scrapped: '报废', borrowed: '借出', maintenance: '维修'
+      };
+
+      for (let i = 0; i < unmatchedRows.length; i++) {
+        const row = unmatchedRows[i];
+        sheet.addRow([
+          i + 1,
+          row.category || '', row.serial_number || '', row.model || '',
+          row.manufacturer || '', row.installation_location || '',
+          row.range_min != null ? row.range_min : '',
+          row.range_max != null ? row.range_max : '',
+          row.range_unit || '',
+          row.accuracy_class || '',
+          row.certificate_number || '',
+          fmtExportDate(row.inspection_date),
+          fmtExportDate(row.valid_until),
+          row.inspection_unit || '',
+          statusLabel[row.status] || row.status || '',
+          row.department || '',
+          row.remark || ''
+        ]);
+      }
+
+      sheet.views = [{ state: 'frozen', ySplit: 2 }];
+    }
+
+    // 如果没有任何数据，也返回带有所有空 sheet 的文件
+    const filename = `计量器具台账总表_${new Date().toISOString().slice(0, 10)}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
     console.error('导出错误:', err);
-    res.status(500).json({ code: 500, message: '导出失败' });
+    res.status(500).json({ code: 500, message: '导出失败: ' + err.message });
   }
 });
 
@@ -464,6 +603,46 @@ router.get('/export/warning-apply', async (req, res) => {
   }
 });
 
+// ============ Recycle bin and history APIs (fixed routes before /:id) ============
+router.get('/recycle-bin/list', async (req, res) => {
+  try { res.json({ code: 200, data: Instrument.listDeleted(req.query) }); }
+  catch (err) { res.status(500).json({ code: 500, message: err.message }); }
+});
+
+router.post('/recycle-bin/:id/restore', async (req, res) => {
+  try {
+    const result = Instrument.restoreDeleted(Number(req.params.id), { source: 'recycle_restore', operatorId: req.userId });
+    if (!result) return res.status(404).json({ code: 404, message: '回收站中不存在该器具' });
+    res.json({ code: 200, data: result, message: '恢复成功' });
+  } catch (err) { res.status(500).json({ code: 500, message: err.message }); }
+});
+
+router.delete('/recycle-bin/:id/purge', async (req, res) => {
+  try {
+    const affected = Instrument.purgeDeleted(Number(req.params.id));
+    if (!affected) return res.status(404).json({ code: 404, message: '回收站中不存在该器具' });
+    res.json({ code: 200, data: { affected }, message: '已彻底删除' });
+  } catch (err) { res.status(500).json({ code: 500, message: err.message }); }
+});
+
+router.get('/:id/history', async (req, res) => {
+  try {
+    if (!Instrument.findById(Number(req.params.id))) return res.status(404).json({ code: 404, message: '记录不存在' });
+    res.json({ code: 200, data: Instrument.listHistory(Number(req.params.id)) });
+  } catch (err) { res.status(500).json({ code: 500, message: err.message }); }
+});
+
+router.post('/:id/history/:versionId/restore', async (req, res) => {
+  try {
+    if (!Instrument.findById(Number(req.params.id))) return res.status(404).json({ code: 404, message: '记录不存在或已在回收站' });
+    const result = Instrument.restoreVersion(Number(req.params.id), Number(req.params.versionId), { operatorId: req.userId });
+    res.json({ code: 200, data: result, message: '版本恢复成功' });
+  } catch (err) {
+    const status = err.message.includes('不属于') || err.message.includes('没有可恢复') ? 400 : 500;
+    res.status(status).json({ code: status, message: err.message });
+  }
+});
+
 // ============ GET /api/instruments/:id ============
 router.get('/:id', async (req, res) => {
   try {
@@ -483,15 +662,16 @@ router.get('/:id', async (req, res) => {
 // ============ POST /api/instruments ============
 router.post('/', async (req, res) => {
   try {
-    const data = req.body;
+    const data = { ...req.body };
+    delete data._changeSource;
     if (!data.category) return res.status(400).json({ code: 400, message: '器具类别不能为空' });
 
     if (data.extra_fields && typeof data.extra_fields === 'object') {
       data.extra_fields = JSON.stringify(data.extra_fields);
     }
 
-    const result = await Instrument.create(data);
-    res.json({ code: 200, data: { id: result.lastInsertId }, message: '新增成功' });
+    const result = await Instrument.createWithHistory(data, { source: 'manual_create', operatorId: req.userId });
+    res.json({ code: 200, data: { id: result.id }, message: '新增成功' });
   } catch (err) {
     console.error('新增错误:', err);
     res.status(500).json({ code: 500, message: '服务器错误: ' + err.message });
@@ -507,13 +687,15 @@ router.put('/:id', async (req, res) => {
     const exists = await Instrument.findById(id);
     if (!exists) return res.status(404).json({ code: 404, message: '记录不存在' });
 
-    const data = req.body;
+    const data = { ...req.body };
+    const source = data._changeSource || 'manual_edit';
+    delete data._changeSource;
     if (data.extra_fields && typeof data.extra_fields === 'object') {
       data.extra_fields = JSON.stringify(data.extra_fields);
     }
 
-    const affected = await Instrument.update(id, data);
-    res.json({ code: 200, data: { affected }, message: '更新成功' });
+    const result = await Instrument.updateWithHistory(id, data, { source, operatorId: req.userId });
+    res.json({ code: 200, data: { affected: result.id ? 1 : 0, summary: result.summary, diff: result.diff }, message: '更新成功' });
   } catch (err) {
     console.error('更新错误:', err);
     res.status(500).json({ code: 500, message: '服务器错误' });
@@ -529,7 +711,7 @@ router.delete('/:id', async (req, res) => {
     const exists = await Instrument.findById(id);
     if (!exists) return res.status(404).json({ code: 404, message: '记录不存在' });
 
-    await Instrument.delete(id);
+    await Instrument.softDelete(id, { source: 'manual_delete', operatorId: req.userId });
     res.json({ code: 200, message: '删除成功' });
   } catch (err) {
     console.error('删除错误:', err);
@@ -712,7 +894,7 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
       }
 
       try {
-        await Instrument.create(data);
+        await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
         successCount++;
       } catch (e) {
         failCount++;
@@ -840,7 +1022,7 @@ async function handleLegacyImport(req, res, filePath, fileName, sheetsToImport, 
       }
 
       try {
-        await Instrument.create(data);
+        await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
         successCount++;
       } catch (e) {
         failCount++;

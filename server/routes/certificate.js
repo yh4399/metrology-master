@@ -49,30 +49,29 @@ router.post('/save', auth, async (req, res) => {
     const { category, id, serial_no, certificate_no, verification_date, verification_unit, expire_date, equipment_name } = req.body;
 
     let updated = 0;
+    let updatedInstrumentIds = [];
 
-    if (id && category) {
+    if (id) {
       // 通过ID更新
-      const result = await Instrument.update(category, id, {
-        certificate_no,
-        verification_date,
-        verification_unit,
-        expire_date,
-      });
-      updated = result.changes || 0;
+      const result = await Instrument.updateWithHistory(id, {
+        certificate_number: certificate_no,
+        inspection_date: verification_date,
+        inspection_unit: verification_unit,
+        valid_until: expire_date,
+      }, { source: 'certificate_save', operatorId: req.userId });
+      if (result && result.id) updatedInstrumentIds = [Number(id)];
+      updated = updatedInstrumentIds.length;
     } else if (serial_no) {
-      // 通过出厂编号更新（跨表）
-      for (const [cat] of Object.entries(require('../models/db').CATEGORY_TABLES)) {
-        const result = await Instrument.updateByCertificate(cat, serial_no, {
-          certificate_no,
-          verification_date,
-          verification_unit,
-          expire_date,
-        });
-        if (result > 0) { updated = result; break; }
-      }
+      updatedInstrumentIds = Instrument.updateCertificateWithHistoryBySerialNoAndCategory(serial_no, category, {
+        certificate_number: certificate_no,
+        inspection_date: verification_date,
+        inspection_unit: verification_unit,
+        valid_until: expire_date,
+      }, { source: 'certificate_save', operatorId: req.userId });
+      updated = updatedInstrumentIds.length;
     }
 
-    res.json({ code: 200, data: { updated }, message: `成功更新 ${updated} 条记录` });
+    res.json({ code: 200, data: { updated, updatedInstrumentIds }, message: `成功更新 ${updated} 条记录` });
   } catch (err) {
     res.status(500).json({ code: 500, message: '保存失败: ' + err.message });
   }
@@ -94,7 +93,7 @@ const PREFIX_CATEGORY_MAP = {
 
 // ============ POST /api/certificate/batch-upload ============
 // 批量上传PDF证书，自动提取出厂编号并匹配器具
-router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) => {
+router.post('/batch-upload', auth, upload.array('files', 200), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ code: 400, message: '请上传PDF文件' });
@@ -104,6 +103,7 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
     let matchedCount = 0;
     let unmatchedCount = 0;
     let errorCount = 0;
+    const updatedInstrumentIds = [];
 
     for (const file of req.files) {
       const originalName = file.originalname.replace(/\.pdf$/i, '');
@@ -114,7 +114,8 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
         category: null,
         matchedInstrument: null,
         certificateNumber: originalName, // 文件名（不含.pdf）作为证书编号
-        status: 'unknown'
+        status: 'unknown',
+        updatedInstrumentIds: []
       };
 
       try {
@@ -143,6 +144,16 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
           serialNumber = parts[parts.length - 1];
         }
         fileResult.serialNumber = serialNumber;
+
+        // 提取正确的证书编号（H1-ZX1 格式：{PREFIX}-H1-ZX1-{DATECODE}，不含出厂编号段）
+        if (h1zx1Pos !== -1) {
+          const h1zx1Prefix = originalName.substring(0, h1zx1Pos);
+          const certAfterMarker = originalName.substring(h1zx1Pos + h1zx1Marker.length);
+          const certAfterParts = certAfterMarker.split('-');
+          const dateCode = certAfterParts[0]; // 10位日期码
+          fileResult.certificateNumber = h1zx1Prefix + h1zx1Marker + dateCode;
+        }
+        // 非标准格式保持 originalName（已在上面设置）
 
         // 提取类别前缀（第一个部分，但可能是复合前缀如 YLB-Y、YLB-N）
         let prefix = parts[0];
@@ -178,10 +189,11 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
             fileResult.status = 'matched';
 
             // === 自动填入证书编号（按类别精确更新） ===
-            await Instrument.updateCertificateBySerialNoAndCategory(
+            fileResult.updatedInstrumentIds = await Instrument.updateCertificateWithHistoryBySerialNoAndCategory(
               String(serialNumber),
               fileResult.category,
-              { certificate_number: originalName }
+              { certificate_number: fileResult.certificateNumber },
+              { source: 'certificate_upload', operatorId: req.userId }
             );
             matchedCount++;
           } else if (instruments.length > 1) {
@@ -206,10 +218,11 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
               fileResult.status = 'matched';
               fileResult.warning = `出厂编号 "${serialNumber}" 在类别 "${fileResult.category}" 下有 ${instruments.length} 条重复记录，全部已更新（建议清理重复数据）`;
 
-              await Instrument.updateCertificateBySerialNoAndCategory(
+              fileResult.updatedInstrumentIds = await Instrument.updateCertificateWithHistoryBySerialNoAndCategory(
                 String(serialNumber),
                 fileResult.category,
-                { certificate_number: originalName }
+                { certificate_number: fileResult.certificateNumber },
+                { source: 'certificate_upload', operatorId: req.userId }
               );
               matchedCount++;
             }
@@ -229,6 +242,7 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
       }
 
       results.push(fileResult);
+      updatedInstrumentIds.push(...fileResult.updatedInstrumentIds);
     }
 
     res.json({
@@ -238,6 +252,7 @@ router.post('/batch-upload', auth, upload.array('files', 50), async (req, res) =
         matched: matchedCount,
         unmatched: unmatchedCount,
         error: errorCount,
+        updatedInstrumentIds: [...new Set(updatedInstrumentIds)],
         results
       },
       message: `处理完成：${matchedCount}条匹配成功，${unmatchedCount}条未匹配，${errorCount}条出错`
