@@ -1,5 +1,7 @@
 const { queryAll, queryOne, run, transaction } = require('./db');
 const History = require('../services/instrumentHistory');
+const fs = require('fs');
+const path = require('path');
 
 // 统一计量器具模型 - 单表设计
 const Instrument = {
@@ -181,7 +183,7 @@ const Instrument = {
       'installation_location', 'department',
       'certificate_number', 'inspection_date', 'valid_until',
       'inspection_result', 'inspection_unit', 'status', 'remark',
-      'extra_fields', 'photo_url'
+      'extra_fields', 'photo_url', 'certificate_file'
     ];
 
     const present = fields.filter(f => data[f] !== undefined && data[f] !== null);
@@ -301,11 +303,19 @@ const Instrument = {
   },
 
   purgeDeleted(id) {
-    const deleted = queryOne('SELECT id FROM instruments WHERE id = ? AND is_deleted = 1', [id]);
+    const deleted = queryOne('SELECT id, certificate_file FROM instruments WHERE id = ? AND is_deleted = 1', [id]);
     if (!deleted) return 0;
     return transaction(() => {
       run('DELETE FROM instrument_versions WHERE instrument_id = ?', [id]);
-      return run('DELETE FROM instruments WHERE id = ? AND is_deleted = 1', [id]).changes;
+      const result = run('DELETE FROM instruments WHERE id = ? AND is_deleted = 1', [id]);
+      // 清理证书附件目录
+      if (deleted.certificate_file) {
+        try {
+          const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(id));
+          if (fs.existsSync(certDir)) fs.rmSync(certDir, { recursive: true, force: true });
+        } catch (e) { /* 忽略清理错误 */ }
+      }
+      return result.changes;
     });
   },
 
@@ -384,6 +394,7 @@ const Instrument = {
     if (data.valid_until !== undefined) { sets.push('valid_until = ?'); vals.push(data.valid_until); }
     if (data.inspection_unit !== undefined) { sets.push('inspection_unit = ?'); vals.push(data.inspection_unit); }
     if (data.inspection_result !== undefined) { sets.push('inspection_result = ?'); vals.push(data.inspection_result); }
+    if (data.certificate_file !== undefined) { sets.push('certificate_file = ?'); vals.push(data.certificate_file); }
     if (sets.length === 0) return 0;
     sets.push("updated_at = datetime('now','localtime')");
     vals.push(serialNo);
@@ -402,6 +413,7 @@ const Instrument = {
     if (data.valid_until !== undefined) { sets.push('valid_until = ?'); vals.push(data.valid_until); }
     if (data.inspection_unit !== undefined) { sets.push('inspection_unit = ?'); vals.push(data.inspection_unit); }
     if (data.inspection_result !== undefined) { sets.push('inspection_result = ?'); vals.push(data.inspection_result); }
+    if (data.certificate_file !== undefined) { sets.push('certificate_file = ?'); vals.push(data.certificate_file); }
     if (sets.length === 0) return 0;
     sets.push("updated_at = datetime('now','localtime')");
 

@@ -144,3 +144,41 @@ export function ocrPhoto(file) {
 export function ocrFromUrl(photoUrl) {
   return request.post('/instruments/ocr', { photo_url: photoUrl })
 }
+
+// 证书日期校验
+export function checkCertDates(params) {
+  return request.get('/certificate/check-dates', { params })
+}
+
+// 批量更新证书日期
+export function batchUpdateCertDates(data) {
+  return request.post('/certificate/batch-update-dates', data)
+}
+
+// ===== 有效日期规则管理 =====
+export function getValidityRules() {
+  return request.get('/certificate/validity-rules')
+}
+export function createValidityRule(data) {
+  return request.post('/certificate/validity-rules', data)
+}
+export function updateValidityRule(id, data) {
+  return request.put('/certificate/validity-rules/' + id, data)
+}
+export function deleteValidityRule(id) {
+  return request.delete('/certificate/validity-rules/' + id)
+}
+export function resetValidityRules() {
+  return request.post('/certificate/validity-rules/reset')
+}
+
+// 为单个器具上传证书 PDF
+export async function uploadCertificateForInstrument(id, file) {
+  const authStore = useAuthStore()
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await axios.post('/api/instruments/' + id + '/certificate', formData, {
+    headers: { Authorization: 'Bearer ' + authStore.token }
+  })
+  return response.data
+}

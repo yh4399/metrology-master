@@ -57,7 +57,8 @@ function createAllTables(database) {
   const instrumentColumns = new Set(queryTableColumns(database, 'instruments'));
   const migrations = [
     ['is_deleted', 'INTEGER DEFAULT 0'], ['deleted_at', 'TEXT'],
-    ['latest_change_at', 'TEXT'], ['latest_change_summary', 'TEXT']
+    ['latest_change_at', 'TEXT'], ['latest_change_summary', 'TEXT'],
+    ['certificate_file', 'TEXT']
   ];
   for (const [column, definition] of migrations) {
     if (!instrumentColumns.has(column)) database.run(`ALTER TABLE instruments ADD COLUMN ${column} ${definition}`);

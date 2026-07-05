@@ -5,7 +5,8 @@ const FIELD_LABELS = {
   range_min: '量程下限', range_max: '量程上限', range_unit: '量程单位', accuracy_class: '准确度等级',
   installation_location: '安装位置', department: '所属部门', certificate_number: '证书编号',
   inspection_date: '检验日期', valid_until: '有效日期', inspection_result: '检验结果',
-  inspection_unit: '检验单位', status: '状态', remark: '备注', extra_fields: '扩展信息', photo_url: '照片'
+  inspection_unit: '检验单位', status: '状态', remark: '备注', extra_fields: '扩展信息', photo_url: '照片',
+  certificate_file: '证书附件'
 };
 const TRACKED_FIELDS = Object.freeze(Object.keys(FIELD_LABELS));
 

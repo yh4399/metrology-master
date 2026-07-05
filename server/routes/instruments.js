@@ -5,6 +5,7 @@ const fs = require('fs');
 const ExcelJS = require('exceljs');
 const auth = require('../middleware/auth');
 const Instrument = require('../models/instrument');
+const ValidityRules = require('../models/validityRules');
 const excelService = require('../services/excel');
 
 const router = express.Router();
@@ -58,6 +59,17 @@ const uploadsDir = path.join(__dirname, '..', 'uploads');
 const photosDir = path.join(uploadsDir, 'photos');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true });
+const certsDir = path.join(uploadsDir, 'certificates');
+if (!fs.existsSync(certsDir)) fs.mkdirSync(certsDir, { recursive: true });
+
+// 单个证书 PDF 上传
+const certFileUpload = multer({
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (path.extname(file.originalname).toLowerCase() === '.pdf') cb(null, true);
+    else cb(new Error('仅支持PDF文件'));
+  }
+});
 
 // ============ GET /api/instruments/categories/list ============
 router.get('/categories/list', async (req, res) => {
@@ -603,6 +615,109 @@ router.get('/export/warning-apply', async (req, res) => {
   }
 });
 
+// ============ GET /api/instruments/export/ledger ============
+// 导出完整台账（多Sheet Excel，按类别分组）
+router.get('/export/ledger', async (req, res) => {
+  try {
+    const rows = await Instrument.findAll({ pageSize: 99999 });
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ code: 404, message: '没有数据可导出' });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = '计量器具管理系统';
+
+    // Sheet 列定义（与台账总表模板对齐）
+    const columns = [
+      { header: '序号', key: 'index', width: 6 },
+      { header: '安装位置', key: 'installation_location', width: 22 },
+      { header: '规格型号', key: 'model', width: 18 },
+      { header: '生产厂家', key: 'manufacturer', width: 16 },
+      { header: '量程', key: 'range_str', width: 12 },
+      { header: '出厂编号', key: 'serial_number', width: 14 },
+      { header: '检验时间', key: 'inspection_date', width: 12 },
+      { header: '有效期', key: 'valid_until', width: 12 },
+      { header: '证书编号', key: 'certificate_number', width: 26 },
+      { header: '分类管理', key: 'classification', width: 8 },
+      { header: '检验单位', key: 'inspection_unit', width: 18 },
+      { header: '状态', key: 'status_label', width: 8 },
+      { header: '准确度', key: 'accuracy_class', width: 8 },
+    ];
+
+    const statusLabel = { active: '在用', scrapped: '报废', borrowed: '借出', maintenance: '维修' };
+
+    // 按类别分组
+    const groups = {};
+    for (const row of rows) {
+      const cat = row.category || '其他';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(row);
+    }
+
+    for (const [cat, catRows] of Object.entries(groups)) {
+      const sheetName = cat.length > 28 ? cat.substring(0, 28) + '..' : cat;
+      const sheet = workbook.addWorksheet(sheetName);
+
+      // 标题行
+      const titleRow = sheet.addRow([cat + '台账']);
+      sheet.mergeCells(1, 1, 1, columns.length);
+      titleRow.font = { bold: true, size: 14 };
+      titleRow.alignment = { horizontal: 'center' };
+      titleRow.height = 28;
+
+      // 表头
+      const headerRow = sheet.addRow(columns.map(c => c.header));
+      headerRow.font = { bold: true, size: 11 };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+      headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      // 列宽
+      columns.forEach((c, i) => { sheet.getColumn(i + 1).width = c.width; });
+
+      // 数据行
+      catRows.forEach((r, idx) => {
+        const classification = (() => {
+          try {
+            if (!r.extra_fields) return '';
+            const ef = typeof r.extra_fields === 'string' ? JSON.parse(r.extra_fields) : r.extra_fields;
+            return ef.classification || '';
+          } catch (_) { return ''; }
+        })();
+
+        const rangeParts = [];
+        if (r.range_min != null) rangeParts.push(r.range_min);
+        if (r.range_max != null) rangeParts.push('~' + r.range_max);
+        if (r.range_unit) rangeParts.push(r.range_unit);
+
+        sheet.addRow([
+          idx + 1,
+          r.installation_location || '',
+          r.model || '',
+          r.manufacturer || '',
+          rangeParts.join(' '),
+          r.serial_number || '',
+          r.inspection_date || '',
+          r.valid_until || '',
+          r.certificate_number || '',
+          classification,
+          r.inspection_unit || '',
+          statusLabel[r.status] || r.status || '',
+          r.accuracy_class || ''
+        ]);
+      });
+    }
+
+    const fileName = '台账总表_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    res.setHeader('Content-Disposition', 'attachment; filename=' + encodeURIComponent(fileName));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error('台账导出失败:', err);
+    res.status(500).json({ code: 500, message: '导出失败: ' + err.message });
+  }
+});
+
 // ============ Recycle bin and history APIs (fixed routes before /:id) ============
 router.get('/recycle-bin/list', async (req, res) => {
   try { res.json({ code: 200, data: Instrument.listDeleted(req.query) }); }
@@ -719,6 +834,67 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ============ POST /api/instruments/:id/certificate ============
+// 为单个器具上传证书 PDF
+router.post('/:id/certificate', certFileUpload.single('file'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ code: 400, message: '无效的ID' });
+
+    const instrument = await Instrument.findById(id);
+    if (!instrument) return res.status(404).json({ code: 404, message: '器具不存在' });
+
+    if (!req.file) return res.status(400).json({ code: 400, message: '请上传PDF文件' });
+
+    // 文件名（不含.pdf）作为证书编号
+    const certNo = req.file.originalname.replace(/\.pdf$/i, '');
+    const safeCertNo = certNo.replace(/[<>:"/\\|?*]/g, '_');
+
+    // 保存到 persisten 目录
+    const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(id));
+    fs.mkdirSync(certDir, { recursive: true });
+    const destPath = path.join(certDir, safeCertNo + '.pdf');
+    fs.copyFileSync(req.file.path, destPath);
+
+    const updateData = {
+      certificate_number: certNo,
+      certificate_file: `/uploads/certificates/${id}/${safeCertNo}.pdf`
+    };
+
+    // 提取检验日期 → 计算有效日期
+    const extractedDate = ValidityRules.extractInspectionDate(certNo);
+    if (extractedDate) {
+      updateData.inspection_date = extractedDate;
+      const classification = (() => {
+        try {
+          if (!instrument.extra_fields) return null;
+          const ef = typeof instrument.extra_fields === 'string' ? JSON.parse(instrument.extra_fields) : instrument.extra_fields;
+          return String(ef.classification || '').replace(/类/g, '').trim() || null;
+        } catch (_) { return null; }
+      })();
+      updateData.valid_until = ValidityRules.calculateValidUntil(extractedDate, instrument.category, classification);
+    }
+
+    const result = await Instrument.updateWithHistory(id, updateData, {
+      source: 'manual_cert_upload', operatorId: req.userId
+    });
+
+    res.json({
+      code: 200,
+      data: {
+        certificate_file: updateData.certificate_file,
+        certificate_number: certNo,
+        inspection_date: updateData.inspection_date || null,
+        valid_until: updateData.valid_until || null,
+        dateExtracted: !!extractedDate
+      },
+      message: '证书上传成功'
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '证书上传失败: ' + err.message });
+  }
+});
+
 // ============ POST /api/instruments/import/upload ============
 // 多Sheet版：返回所有Sheet概览供用户选择
 router.post('/import/upload', upload.single('file'), async (req, res) => {
@@ -816,6 +992,44 @@ function findUploadedFile(uploadDirPath) {
   return path.join(uploadDirPath, files[0]);
 }
 
+// ============ 智能检验日期匹配 ============
+// 导入台账时，若证书提取日期比台账检验日期更接近现在，则使用证书日期
+function applySmartInspectionDate(data) {
+  if (!data.certificate_number || !data.inspection_date) return;
+  try {
+    const certDate = ValidityRules.extractInspectionDate(data.certificate_number);
+    if (!certDate) return;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const certTime = new Date(certDate + 'T00:00:00');
+    const ledgerTime = new Date(data.inspection_date + 'T00:00:00');
+
+    if (isNaN(certTime.getTime()) || isNaN(ledgerTime.getTime())) return;
+
+    const certDiff = Math.abs(certTime - today);
+    const ledgerDiff = Math.abs(ledgerTime - today);
+
+    if (certDiff < ledgerDiff) {
+      // 证书日期更接近现在 → 使用证书日期
+      data.inspection_date = certDate;
+    }
+    // 否则保留台账日期
+  } catch (_) { /* ignore */ }
+
+  // 根据最终选定的检验日期计算有效日期
+  if (data.inspection_date) {
+    try {
+      let cls = null;
+      if (data.extra_fields) {
+        const ef = typeof data.extra_fields === 'string' ? JSON.parse(data.extra_fields) : data.extra_fields;
+        cls = String(ef.classification || '').replace(/类/g, '').trim() || null;
+      }
+      data.valid_until = ValidityRules.calculateValidUntil(data.inspection_date, data.category, cls);
+    } catch (_) { /* ignore */ }
+  }
+}
+
 // 新版：多Sheet独立映射导入
 // filePath 由调用方传入（来自前端传回的精确路径或降级的 findUploadedFile）
 async function handleMultiSheetImport(req, res, filePath, fileName, sheetMappings) {
@@ -894,6 +1108,7 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
       }
 
       try {
+        applySmartInspectionDate(data);
         await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
         successCount++;
       } catch (e) {
@@ -1022,6 +1237,7 @@ async function handleLegacyImport(req, res, filePath, fileName, sheetsToImport, 
       }
 
       try {
+        applySmartInspectionDate(data);
         await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
         successCount++;
       } catch (e) {

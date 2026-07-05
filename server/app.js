@@ -9,8 +9,10 @@ const app = express();
 // 确保上传目录存在
 const uploadsDir = path.join(__dirname, 'uploads');
 const photosDir = path.join(uploadsDir, 'photos');
+const certsDir = path.join(uploadsDir, 'certificates');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true });
+if (!fs.existsSync(certsDir)) fs.mkdirSync(certsDir, { recursive: true });
 
 // 中间件
 app.use(express.json());
@@ -55,6 +57,7 @@ const { getDb } = require('./models/db');
 
 async function start() {
   await getDb();
+  require('./models/validityRules').init();
   console.log('数据库初始化完成');
 
   app.listen(config.port, () => {

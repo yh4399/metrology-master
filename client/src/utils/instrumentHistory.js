@@ -3,6 +3,8 @@ const SOURCE_LABELS = {
   manual_edit: '手动编辑',
   manual_delete: '删除器具',
   certificate_upload: '批量上传证书',
+  certificate_date_fix: '证书日期校验修正',
+  manual_cert_upload: '手动上传证书',
   certificate_save: '证书信息保存',
   excel_import: 'Excel 导入',
   restore_version: '恢复历史版本',

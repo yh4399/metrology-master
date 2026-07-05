@@ -76,6 +76,15 @@
           <el-button type="success" plain @click="batchCertVisible = true" style="flex-shrink:0">
             <el-icon><UploadFilled /></el-icon> 批量上传证书
           </el-button>
+          <el-button type="warning" plain @click="openCertCheck" style="flex-shrink:0">
+            <el-icon><Warning /></el-icon> 证书日期校验
+          </el-button>
+          <el-button plain @click="openRulesConfig" style="flex-shrink:0">
+            <el-icon><Setting /></el-icon> 有效期规则
+          </el-button>
+          <el-button plain @click="exportLedger" style="flex-shrink:0">
+            <el-icon><Download /></el-icon> 保存台账
+          </el-button>
           <el-button plain @click="recycleBinVisible = true" style="flex-shrink:0">
             <el-icon><Delete /></el-icon> 回收站
           </el-button>
@@ -241,6 +250,18 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
+            <el-table-column label="检验日期" width="110" align="center">
+              <template #default="{ row }">
+                <span v-if="row.extractedInspectionDate">{{ row.extractedInspectionDate }}</span>
+                <span v-else style="color:#c0c4cc">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="有效日期" width="110" align="center">
+              <template #default="{ row }">
+                <span v-if="row.calculatedValidUntil">{{ row.calculatedValidUntil }}</span>
+                <span v-else style="color:#c0c4cc">-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="匹配结果" width="160">
               <template #default="{ row }">
                 <template v-if="row.status === 'matched'">
@@ -261,6 +282,16 @@
       <template #footer>
         <el-button @click="batchCertVisible = false">关闭</el-button>
         <el-button
+          v-if="batchResults"
+          type="danger"
+          plain
+          :disabled="batchUploading"
+          @click="clearBatchResults"
+        >
+          <el-icon><Delete /></el-icon>
+          清除结果，继续上传
+        </el-button>
+        <el-button
           type="primary"
           :disabled="batchFiles.length === 0"
           :loading="batchUploading"
@@ -269,6 +300,168 @@
           <el-icon><UploadFilled /></el-icon>
           上传并匹配（{{ batchFiles.length }} 个文件）
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 证书日期校验对话框 -->
+    <el-dialog v-model="certCheckVisible" title="📋 证书日期校验" width="1100px" :close-on-click-modal="false" @open="loadCertCheck">
+      <div v-loading="certCheckLoading">
+        <!-- 统计摘要：维度一 -->
+        <div v-if="certCheckData" style="margin-bottom:6px;display:flex;gap:6px;flex-wrap:wrap">
+          <span style="font-size:13px;color:var(--text-secondary);line-height:24px">证书→检验：</span>
+          <el-tag size="small" type="success">匹配 {{ certCheckData.certMatch }}</el-tag>
+          <el-tag size="small" type="danger">不匹配 {{ certCheckData.certMismatch }}</el-tag>
+          <el-tag size="small" type="danger">缺失 {{ certCheckData.certMissing }}</el-tag>
+          <el-tag size="small" type="info">无法提取 {{ certCheckData.certNoExtract }}</el-tag>
+        </div>
+        <!-- 统计摘要：维度二 -->
+        <div v-if="certCheckData" style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">
+          <span style="font-size:13px;color:var(--text-secondary);line-height:24px">检验→有效：</span>
+          <el-tag size="small" type="success">匹配 {{ certCheckData.validMatch }}</el-tag>
+          <el-tag size="small" type="danger">不匹配 {{ certCheckData.validMismatch }}</el-tag>
+          <el-tag size="small" type="danger">缺失 {{ certCheckData.validMissing }}</el-tag>
+        </div>
+
+        <div v-if="certCheckData" style="margin-bottom:12px;display:flex;gap:8px">
+          <el-checkbox v-model="certCheckOnlyMismatch" @change="loadCertCheck">仅看不匹配/缺失</el-checkbox>
+          <el-button type="primary" size="small" :disabled="certCheckSelected.length === 0" @click="handleBatchUpdateDates">
+            批量更新选中项（{{ certCheckSelected.length }}）
+          </el-button>
+        </div>
+
+        <el-table
+          v-if="certCheckData"
+          :data="certCheckData.results"
+          max-height="400"
+          size="small"
+          stripe
+          @selection-change="(rows) => certCheckSelected = rows"
+        >
+          <el-table-column type="selection" width="40" />
+          <el-table-column prop="category" label="类别" width="90" show-overflow-tooltip />
+          <el-table-column prop="serial_number" label="出厂编号" width="120" show-overflow-tooltip />
+          <el-table-column prop="certificate_number" label="证书编号" min-width="200" show-overflow-tooltip />
+          <el-table-column label="证书→检验" width="150" align="center">
+            <template #default="{ row }">
+              <template v-if="row.cert_status === 'cert_mismatch'">
+                <span style="text-decoration:line-through;color:#dc2626;font-size:12px">{{ formatDate(row.inspection_date) }}</span>
+                <span style="color:#16a34a;font-weight:600;margin-left:2px">→ {{ row.extracted_date }}</span>
+              </template>
+              <template v-else-if="row.cert_status === 'cert_missing'">
+                <span style="color:#c0c4cc">-</span>
+                <span style="color:#16a34a;font-weight:600;margin-left:2px">→ {{ row.extracted_date }}</span>
+              </template>
+              <span v-else-if="row.cert_status === 'cert_match'" style="color:#16a34a;font-size:12px">{{ formatDate(row.inspection_date) }} ✓</span>
+              <span v-else style="color:#c0c4cc;font-size:12px">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="检验→有效" width="160" align="center">
+            <template #default="{ row }">
+              <template v-if="row.valid_status === 'valid_mismatch'">
+                <span style="text-decoration:line-through;color:#dc2626;font-size:12px">{{ formatDate(row.valid_until) }}</span>
+                <span style="color:#409EFF;font-weight:600;margin-left:2px">→ {{ row.expected_valid_until }}</span>
+              </template>
+              <template v-else-if="row.valid_status === 'valid_missing'">
+                <span style="color:#c0c4cc">-</span>
+                <span style="color:#409EFF;font-weight:600;margin-left:2px">→ {{ row.expected_valid_until }}</span>
+              </template>
+              <span v-else-if="row.valid_status === 'valid_match'" style="color:#16a34a;font-size:12px">{{ formatDate(row.valid_until) }} ✓</span>
+              <span v-else style="color:#c0c4cc;font-size:12px">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="综合" width="70" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.status === 'match'" size="small" type="success">正常</el-tag>
+              <el-tag v-else-if="row.status === 'mismatch'" size="small" type="danger">异常</el-tag>
+              <el-tag v-else-if="row.status === 'missing'" size="small" type="warning">缺失</el-tag>
+              <el-tag v-else size="small" type="info">跳过</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="certCheckData && certCheckData.results.length === 0" description="没有需要关注的记录" />
+      </div>
+
+      <template #footer>
+        <el-button @click="certCheckVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 有效日期规则配置对话框 -->
+    <el-dialog v-model="rulesConfigVisible" title="⚙ 有效日期计算规则" width="750px" :close-on-click-modal="false" @open="loadRules">
+      <div v-loading="rulesLoading">
+        <div style="margin-bottom:12px;display:flex;gap:8px">
+          <el-button size="small" type="danger" plain @click="handleResetRules">重置为默认规则</el-button>
+          <el-button size="small" type="primary" @click="openRuleForm(null)">+ 新增规则</el-button>
+        </div>
+
+        <el-table :data="rulesList" max-height="400" size="small" stripe>
+          <el-table-column prop="priority" label="优先级" width="70" align="center" />
+          <el-table-column prop="category" label="类别" width="140">
+            <template #default="{ row }">
+              <el-tag v-if="row.category === '*'" size="small" type="info">* (默认)</el-tag>
+              <span v-else>{{ row.category }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="分类" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.classification" size="small">{{ row.classification }}类</el-tag>
+              <span v-else style="color:#909399">全部</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="有效期" width="100" align="center">
+            <template #default="{ row }">
+              {{ row.period_value }} {{ row.period_unit === 'year' ? '年' : '月' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="130" align="center">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openRuleForm(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="handleDeleteRule(row)" :disabled="row.category === '*' && row.classification === null">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div style="margin-top:8px;font-size:12px;color:#909399">
+          匹配规则：优先级从高到低，首个匹配类别+分类的规则生效。* = 匹配所有类别，分类为空 = 匹配所有分类。
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="rulesConfigVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新增/编辑规则弹窗 -->
+    <el-dialog v-model="ruleFormVisible" :title="editingRule ? '编辑规则' : '新增规则'" width="420px" :close-on-click-modal="false">
+      <el-form :model="ruleForm" label-width="80px" size="default">
+        <el-form-item label="器具类别">
+          <el-select v-model="ruleForm.category" filterable allow-create placeholder="选择或输入类别" style="width:100%">
+            <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
+            <el-option label="* (匹配所有，兜底)" value="*" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="分类管理">
+          <el-select v-model="ruleForm.classification" placeholder="全部（匹配所有分类）" clearable style="width:100%">
+            <el-option label="A 类" value="A" />
+            <el-option label="B 类" value="B" />
+            <el-option label="C 类" value="C" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="有效期">
+          <el-input-number v-model="ruleForm.period_value" :min="1" :max="99" style="width:120px" />
+          <el-select v-model="ruleForm.period_unit" style="width:90px;margin-left:8px">
+            <el-option label="月" value="month" />
+            <el-option label="年" value="year" />
+          </el-select>
+          <span style="margin-left:8px;font-size:12px;color:#909399">（−1天）</span>
+        </el-form-item>
+        <el-form-item label="优先级">
+          <el-input-number v-model="ruleForm.priority" :min="0" :max="99" style="width:120px" />
+          <span style="margin-left:8px;font-size:12px;color:#909399">越大越优先</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ruleFormVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveRule">保存</el-button>
       </template>
     </el-dialog>
 
@@ -355,7 +548,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="变更信息" width="230">
+        <el-table-column label="变更信息" width="230" align="center">
           <template #default="{ row }">
             <div v-if="row.latest_change_at" class="change-info-cell">
               <el-tag type="success" size="small" class="updated-tag" @click.stop="openHistory(row)">已更新</el-tag>
@@ -502,6 +695,26 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="附件" width="85" align="center">
+          <template #default="{ row }">
+            <template v-if="row.certificate_file">
+              <el-button link type="primary" size="small" @click="viewCertificate(row)">
+                <el-icon :size="16"><Document /></el-icon>
+              </el-button>
+            </template>
+            <input
+              type="file"
+              accept=".pdf"
+              :ref="el => certInputRefs[row.id] = el"
+              style="display:none"
+              @change="(e) => handleSingleCertUpload(row, e)"
+            />
+            <el-button link size="small" :type="row.certificate_file ? 'default' : 'primary'" @click="certInputRefs[row.id]?.click()">
+              <el-icon :size="14"><FolderAdd /></el-icon>
+            </el-button>
+          </template>
+        </el-table-column>
+
         <el-table-column label="操作" width="170" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="$router.push('/instruments/' + row.id)">
@@ -577,13 +790,13 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Search, Plus, Upload, Download, Refresh, Edit, Delete, PictureFilled, DArrowRight, Camera, FolderOpened, ArrowDown, UploadFilled, FolderDelete, Warning, Filter, Select
+  Search, Plus, Upload, Download, Refresh, Edit, Delete, PictureFilled, DArrowRight, Camera, FolderOpened, ArrowDown, UploadFilled, FolderDelete, Warning, Filter, Select, Document, Setting, FolderAdd
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats } from '../api/instruments'
+import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats, checkCertDates, batchUpdateCertDates, getValidityRules, createValidityRule, updateValidityRule, deleteValidityRule, resetValidityRules, uploadCertificateForInstrument } from '../api/instruments'
 import { STATUS_OPTIONS, STATUS_MAP, CATEGORIES, getCategoryColor } from '../utils/constants'
 import { useAuthStore } from '../stores/auth'
 import InstrumentHistoryDrawer from '../components/InstrumentHistoryDrawer.vue'
@@ -616,6 +829,26 @@ const batchUploading = ref(false)
 const batchProgress = ref(0)
 const batchResults = ref(null)
 const batchSummary = ref({ matched: 0, unmatched: 0, error: 0 })
+
+// === 单证书上传 ===
+const certInputRefs = ref({})
+
+// === 证书日期校验 ===
+const certCheckVisible = ref(false)
+const certCheckLoading = ref(false)
+const certCheckData = ref(null)
+const certCheckOnlyMismatch = ref(true)
+const certCheckSelected = ref([])
+
+// === 有效日期规则配置 ===
+const rulesConfigVisible = ref(false)
+const rulesLoading = ref(false)
+const rulesList = ref([])
+const ruleFormVisible = ref(false)
+const editingRule = ref(null)
+const ruleForm = reactive({
+  category: '', classification: null, period_value: 1, period_unit: 'year', priority: 0
+})
 
 // === 拍照查找 ===
 const photoSearchVisible = ref(false)
@@ -776,6 +1009,8 @@ async function fetchList() {
       pagination.page--
       return fetchList()
     }
+    await nextTick()
+    tableRef.value?.doLayout()
   } catch (err) {
     // handled
   } finally {
@@ -1151,6 +1386,33 @@ async function handleBatchUpload() {
     return
   }
 
+  // 如果已有匹配结果，让用户选择覆盖还是追加
+  let appendMode = false
+  if (batchResults.value) {
+    try {
+      await ElMessageBox.confirm(
+        '检测到已有匹配结果。是否将新上传的结果追加到现有结果之后？<br/>点击「追加」保留旧结果并添加新结果，点击「覆盖」将清除旧结果并仅显示新结果。',
+        '已有匹配结果',
+        {
+          confirmButtonText: '追加',
+          cancelButtonText: '覆盖',
+          type: 'warning',
+          distinguishCancelAndClose: true,
+          dangerouslyUseHTMLString: true
+        }
+      )
+      appendMode = true
+    } catch (action) {
+      if (action === 'cancel') {
+        // 用户选择覆盖：清除旧结果
+        clearBatchResults()
+      } else {
+        // 用户点了右上角X关闭弹窗，取消本次上传
+        return
+      }
+    }
+  }
+
   batchUploading.value = true
   batchProgress.value = 30
 
@@ -1159,11 +1421,23 @@ async function handleBatchUpload() {
     const res = await batchUploadCertificates(rawFiles)
 
     batchProgress.value = 100
-    batchResults.value = res.data.results
-    batchSummary.value = {
-      matched: res.data.matched,
-      unmatched: res.data.unmatched,
-      error: res.data.error
+
+    if (appendMode && batchResults.value) {
+      // 追加模式：合并新结果到已有结果
+      batchResults.value = [...batchResults.value, ...res.data.results]
+      batchSummary.value = {
+        matched: batchSummary.value.matched + res.data.matched,
+        unmatched: batchSummary.value.unmatched + res.data.unmatched,
+        error: batchSummary.value.error + res.data.error
+      }
+    } else {
+      // 覆盖模式或首次上传
+      batchResults.value = res.data.results
+      batchSummary.value = {
+        matched: res.data.matched,
+        unmatched: res.data.unmatched,
+        error: res.data.error
+      }
     }
 
     if (res.data.matched > 0) {
@@ -1172,11 +1446,194 @@ async function handleBatchUpload() {
     } else if (res.data.unmatched > 0) {
       ElMessage.warning(`${res.data.unmatched} 个证书未找到对应器具，请检查出厂编号`)
     }
+    // 上传完成后清空文件列表，防止重复上传；保留匹配结果供用户查看
+    batchFiles.value = []
   } catch (err) {
     ElMessage.error('批量上传失败：' + (err.response?.data?.message || err.message))
     batchProgress.value = 0
   } finally {
     batchUploading.value = false
+  }
+}
+
+// 清除匹配结果，保留对话框以便继续上传下一批
+function clearBatchResults() {
+  batchResults.value = null
+  batchSummary.value = { matched: 0, unmatched: 0, error: 0 }
+  batchProgress.value = 0
+}
+
+// === 证书日期校验 ===
+function openCertCheck() {
+  certCheckVisible.value = true
+  certCheckSelected.value = []
+  // loadCertCheck 由 @open 自动调用
+}
+
+async function loadCertCheck() {
+  certCheckLoading.value = true
+  certCheckSelected.value = []
+  try {
+    const params = { pageSize: 500 }
+    if (certCheckOnlyMismatch.value) params.onlyMismatch = '1'
+    const res = await checkCertDates(params)
+    certCheckData.value = res.data
+  } catch (err) {
+    ElMessage.error('校验失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    certCheckLoading.value = false
+  }
+}
+
+async function handleBatchUpdateDates() {
+  if (certCheckSelected.value.length === 0) {
+    ElMessage.warning('请先选择要更新的记录')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定更新选中的 ${certCheckSelected.value.length} 条记录的检验日期和有效日期吗？`,
+      '确认批量更新',
+      { confirmButtonText: '确定更新', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+
+  try {
+    const items = certCheckSelected.value.map(r => {
+      const item = { id: r.id }
+      // 维度一：证书日期需要更新 → 更新检验日期
+      const needCertFix = r.cert_status === 'cert_mismatch' || r.cert_status === 'cert_missing'
+      if (needCertFix && r.extracted_date) {
+        item.inspection_date = r.extracted_date
+        // 证书日期更新后，有效日期也跟证书日期走
+        if (r.cert_expected_valid_until) item.valid_until = r.cert_expected_valid_until
+      }
+      // 维度二：有效日期不匹配 → 用预期值修正
+      const needValidFix = r.valid_status === 'valid_mismatch' || r.valid_status === 'valid_missing'
+      if (needValidFix && r.expected_valid_until && !item.valid_until) {
+        item.valid_until = r.expected_valid_until
+      }
+      return item
+    })
+    const res = await batchUpdateCertDates({ items })
+    ElMessage.success(res.message || `成功更新 ${res.data.updated} 条记录`)
+    certCheckSelected.value = []
+    await loadCertCheck()
+    fetchList()
+  } catch (err) {
+    ElMessage.error('批量更新失败：' + (err.response?.data?.message || err.message))
+  }
+}
+
+// === 查看证书附件 ===
+function viewCertificate(row) {
+  const url = photoUrlWithToken(row.certificate_file)
+  window.open(url, '_blank')
+}
+
+async function handleSingleCertUpload(row, event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  try {
+    await uploadCertificateForInstrument(row.id, file)
+    ElMessage.success('证书上传成功')
+    fetchList()
+  } catch (err) {
+    ElMessage.error('上传失败：' + (err.response?.data?.message || err.message))
+  }
+  event.target.value = ''
+}
+
+// 保存台账（导出多Sheet Excel）
+function exportLedger() {
+  const url = '/api/instruments/export/ledger?token=' + authStore.token
+  window.open(url, '_blank')
+}
+
+// === 有效日期规则配置 ===
+function openRulesConfig() {
+  rulesConfigVisible.value = true
+}
+
+async function loadRules() {
+  rulesLoading.value = true
+  try {
+    const res = await getValidityRules()
+    rulesList.value = res.data.rules
+  } catch (err) {
+    ElMessage.error('加载规则失败')
+  } finally {
+    rulesLoading.value = false
+  }
+}
+
+function openRuleForm(rule) {
+  if (rule) {
+    editingRule.value = rule
+    ruleForm.category = rule.category
+    ruleForm.classification = rule.classification
+    ruleForm.period_value = rule.period_value
+    ruleForm.period_unit = rule.period_unit
+    ruleForm.priority = rule.priority
+  } else {
+    editingRule.value = null
+    ruleForm.category = ''
+    ruleForm.classification = null
+    ruleForm.period_value = 1
+    ruleForm.period_unit = 'year'
+    ruleForm.priority = 0
+  }
+  ruleFormVisible.value = true
+}
+
+async function saveRule() {
+  if (!ruleForm.category) { ElMessage.warning('请选择或输入类别'); return }
+  try {
+    if (editingRule.value) {
+      await updateValidityRule(editingRule.value.id, { ...ruleForm })
+      ElMessage.success('规则更新成功')
+    } else {
+      await createValidityRule({ ...ruleForm })
+      ElMessage.success('规则添加成功')
+    }
+    ruleFormVisible.value = false
+    await loadRules()
+  } catch (err) {
+    ElMessage.error('保存失败：' + (err.response?.data?.message || err.message))
+  }
+}
+
+async function handleDeleteRule(rule) {
+  if (rule.category === '*' && rule.classification === null) {
+    ElMessage.warning('默认兜底规则不可删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除规则「${rule.category === '*' ? '默认' : rule.category}」吗？`, '确认删除', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+  try {
+    await deleteValidityRule(rule.id)
+    ElMessage.success('删除成功')
+    await loadRules()
+  } catch (err) {
+    ElMessage.error('删除失败')
+  }
+}
+
+async function handleResetRules() {
+  try {
+    await ElMessageBox.confirm('确定重置为默认规则吗？所有自定义规则将被清除。', '确认重置', {
+      confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+  try {
+    const res = await resetValidityRules()
+    rulesList.value = res.data.rules
+    ElMessage.success('已重置为默认规则')
+  } catch (err) {
+    ElMessage.error('重置失败')
   }
 }
 
@@ -1378,6 +1835,11 @@ onMounted(async () => {
 }
 
 /* 表格样式 */
+.modern-table :deep(.el-table__header),
+.modern-table :deep(.el-table__body) {
+  table-layout: fixed;
+}
+
 .modern-table :deep(.el-table__header th) {
   background: #f1f5f9 !important;
   font-weight: 700;
@@ -1403,7 +1865,7 @@ onMounted(async () => {
   color: var(--text-secondary);
 }
 
-.change-info-cell { min-width: 0; }
+.change-info-cell { display: flex; flex-direction: column; align-items: center; min-width: 0; }
 .updated-tag { flex-shrink: 0; cursor: pointer; }
 .change-meta { display: block; max-width: 100%; margin-top: 3px; padding: 0; border: 0; background: transparent; color: #16a34a; font: inherit; font-size: 11px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .change-meta:hover { text-decoration: underline; }
@@ -1624,8 +2086,9 @@ onMounted(async () => {
 
 /* ============ 日期列筛选 ============ */
 .date-col-header {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   cursor: default;
 }
