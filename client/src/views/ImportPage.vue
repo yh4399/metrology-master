@@ -197,8 +197,97 @@
       </div>
     </div>
 
-    <!-- Step 4: 结果 -->
-    <div v-if="activeStep === 3" class="content-panel">
+    <!-- Step 4: 冲突处理 -->
+    <div v-if="activeStep === 3 && importResult.needsResolution" class="content-panel">
+      <div class="conflict-resolution">
+        <el-alert type="warning" :closable="false" show-icon style="margin-bottom:20px">
+          <template #title>
+            导入成功 <strong>{{ importResult.successRows }}</strong> 条，但有
+            <strong>{{ importResult.conflictCount }} 条</strong> 数据的出厂编号与系统现有记录冲突
+          </template>
+          请逐条选择处理策略后点击"应用处理"。
+        </el-alert>
+
+        <!-- 批量操作工具栏 -->
+        <div class="conflict-toolbar">
+          <span style="font-size:14px;color:#606266;margin-right:8px">批量设置：</span>
+          <el-button size="small" @click="batchSetAction('update')">全部 → 以台账为准</el-button>
+          <el-button size="small" @click="batchSetAction('keep')">全部 → 以系统为准</el-button>
+          <el-button size="small" @click="batchSetAction('create_new')">全部 → 强制新建</el-button>
+          <el-button size="small" @click="batchSetAction('skip')">全部 → 跳过</el-button>
+          <el-tag type="info" size="small" style="margin-left:12px">
+            已处理 {{ resolvedCount }} / {{ importResult.conflictCount }}
+          </el-tag>
+        </div>
+
+        <!-- 冲突对比列表 -->
+        <div class="conflict-list">
+          <div v-for="(conflict, idx) in importResult.conflicts" :key="idx"
+            class="conflict-card" :class="{ resolved: conflict._action }">
+            <div class="conflict-card-header">
+              <span class="conflict-index">#{{ idx + 1 }}</span>
+              <el-tag size="small" type="warning">{{ conflict.sourceSheet }} / 第{{ conflict.sourceRow }}行</el-tag>
+              <span class="conflict-serial">
+                出厂编号：<code>{{ conflict.importData.serial_number }}</code>
+              </span>
+              <span class="conflict-existing-id" v-if="conflict.existingRecord">
+                系统记录：<el-tag size="small" type="info">#{{ conflict.existingRecord.id }}</el-tag>
+              </span>
+            </div>
+
+            <!-- 对比视图 -->
+            <div class="conflict-compare" v-if="conflict.conflictFields && conflict.conflictFields.length > 0">
+              <div class="compare-side import-side">
+                <div class="compare-label"><el-tag type="primary" size="small">📥 台账数据（导入）</el-tag></div>
+                <table class="compare-table">
+                  <tr v-for="field in conflict.conflictFields" :key="field.field">
+                    <td class="field-label">{{ field.label }}</td>
+                    <td class="field-value import-value">{{ field.importValue || '(空)' }}</td>
+                  </tr>
+                </table>
+              </div>
+              <div class="compare-divider">⟷</div>
+              <div class="compare-side system-side">
+                <div class="compare-label"><el-tag type="success" size="small">💾 系统记录（已有）</el-tag></div>
+                <table class="compare-table">
+                  <tr v-for="field in conflict.conflictFields" :key="field.field">
+                    <td class="field-label">{{ field.label }}</td>
+                    <td class="field-value system-value">{{ field.systemValue || '(空)' }}</td>
+                  </tr>
+                </table>
+              </div>
+            </div>
+            <div v-else style="text-align:center;color:#909399;padding:12px 0">
+              所有字段与系统一致
+            </div>
+
+            <!-- 处理策略选择 -->
+            <div class="conflict-actions">
+              <span class="action-label">处理策略：</span>
+              <el-radio-group v-model="conflict._action" size="small">
+                <el-radio-button value="update">以台账为准（更新系统）</el-radio-button>
+                <el-radio-button value="keep">以系统为准（保留不变）</el-radio-button>
+                <el-radio-button value="create_new">强制新建（允许重复编号）</el-radio-button>
+                <el-radio-button value="skip">跳过此行</el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div style="text-align:center;margin-top:24px">
+          <el-button @click="resetImport">取消导入</el-button>
+          <el-button type="primary" size="large" :loading="resolvingConflicts"
+            :disabled="resolvedCount < importResult.conflictCount"
+            @click="resolveConflicts">
+            应用处理（{{ resolvedCount }}/{{ importResult.conflictCount }}）
+          </el-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: 结果（无冲突情况） -->
+    <div v-if="activeStep === 3 && !importResult.needsResolution" class="content-panel">
       <div class="result-area">
         <el-result
           :icon="importResult.failRows === 0 ? 'success' : 'warning'"
@@ -258,11 +347,12 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { UploadFilled, ArrowRight, Upload, Refresh, List, WarningFilled, Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { uploadExcel, confirmImport, getCategories } from '../api/instruments'
+import { uploadExcel, confirmImport, getCategories, resolveImportConflicts } from '../api/instruments'
 import { FIELD_OPTIONS, CATEGORIES } from '../utils/constants'
 
 const activeStep = ref(0)
 const importing = ref(false)
+const resolvingConflicts = ref(false)
 const uploadRef = ref(null)
 const currentFile = ref(null)
 const parseResult = ref(null)
@@ -271,6 +361,11 @@ const selectedSheetIndices = reactive(new Set())
 const allCategories = ref(CATEGORIES)
 
 const importResult = ref({ successRows: 0, failRows: 0, errors: [] })
+
+const resolvedCount = computed(() => {
+  if (!importResult.value?.conflicts) return 0
+  return importResult.value.conflicts.filter(c => c._action).length
+})
 
 // 每个选中Sheet的映射数据（独立）
 const sheetMappingList = reactive([])
@@ -442,6 +537,65 @@ function resetImport() {
   activeSheetTab.value = 0
   importResult.value = { successRows: 0, failRows: 0, errors: [] }
   uploadRef.value?.clearFiles()
+}
+
+// === 冲突处理 ===
+function batchSetAction(action) {
+  if (!importResult.value?.conflicts) return
+  importResult.value.conflicts.forEach(c => {
+    if (!c._action) c._action = action
+  })
+}
+
+async function resolveConflicts() {
+  if (!importResult.value?.conflicts) return
+
+  const unresolved = importResult.value.conflicts.filter(c => !c._action)
+  if (unresolved.length > 0) {
+    ElMessage.warning('还有 ' + unresolved.length + ' 条冲突未选择处理策略')
+    return
+  }
+
+  resolvingConflicts.value = true
+  try {
+    const fileData = importResult.value.conflictFileData
+    if (!fileData) {
+      ElMessage.error('缺少导入文件信息，请重新上传')
+      return
+    }
+
+    const resolutions = importResult.value.conflicts.map(c => ({
+      index: c.index,
+      action: c._action,
+      importData: c.importData,
+      existingId: c.existingRecord?.id
+    }))
+
+    const res = await resolveImportConflicts({
+      filePath: fileData.filePath,
+      fileName: fileData.fileName,
+      resolutions
+    })
+
+    importResult.value.needsResolution = false
+    importResult.value.successRows += (res.data.updated + res.data.created)
+    importResult.value.failRows += res.data.errors.length
+
+    if (res.data.errors && res.data.errors.length > 0) {
+      importResult.value.errors = [...(importResult.value.errors || []), ...res.data.errors.map(e =>
+        ({ row: '冲突 #' + (e.index + 1), errors: [e.error] })
+      )]
+    }
+
+    ElMessage.success(
+      '冲突处理完成：更新 ' + res.data.updated + ' 条，跳过 ' + res.data.skipped +
+      ' 条，保留 ' + res.data.kept + ' 条，新建 ' + res.data.created + ' 条'
+    )
+  } catch (err) {
+    ElMessage.error('冲突处理失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    resolvingConflicts.value = false
+  }
 }
 
 onMounted(async () => {
@@ -683,5 +837,143 @@ onMounted(async () => {
   color: #ef4444;
   font-size: 13px;
   margin-bottom: 2px;
+}
+
+/* === 冲突处理 === */
+.conflict-resolution {
+  text-align: left;
+}
+
+.conflict-toolbar {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conflict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.conflict-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+  transition: border-color 0.3s;
+}
+
+.conflict-card.resolved {
+  border-color: #67c23a;
+}
+
+.conflict-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #ebeef5;
+  flex-wrap: wrap;
+}
+
+.conflict-index {
+  font-weight: 700;
+  font-size: 15px;
+  color: #303133;
+}
+
+.conflict-serial {
+  font-size: 13px;
+  color: #606266;
+}
+
+.conflict-serial code {
+  background: #f0f2f5;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.conflict-compare {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.compare-side {
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-label {
+  margin-bottom: 8px;
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.compare-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f2f3f5;
+  font-size: 13px;
+}
+
+.compare-table .field-label {
+  color: #909399;
+  width: 85px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.compare-table .field-value {
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.compare-side.import-side .field-value {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.compare-side.system-side .field-value {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.compare-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c0c4cc;
+  width: 30px;
+  flex-shrink: 0;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.conflict-actions {
+  padding-top: 12px;
+  border-top: 1px dashed #ebeef5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.conflict-actions .action-label {
+  color: #606266;
+  font-size: 13px;
+  font-weight: 500;
 }
 </style>

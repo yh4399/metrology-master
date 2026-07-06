@@ -10,9 +10,26 @@ const app = express();
 const uploadsDir = path.join(__dirname, 'uploads');
 const photosDir = path.join(uploadsDir, 'photos');
 const certsDir = path.join(uploadsDir, 'certificates');
+const tempCertsDir = path.join(uploadsDir, 'temp_certs');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true });
 if (!fs.existsSync(certsDir)) fs.mkdirSync(certsDir, { recursive: true });
+if (!fs.existsSync(tempCertsDir)) fs.mkdirSync(tempCertsDir, { recursive: true });
+
+// 清理超过 24 小时的临时证书文件
+try {
+  const now = Date.now();
+  const tempFiles = fs.readdirSync(tempCertsDir);
+  for (const f of tempFiles) {
+    const fPath = path.join(tempCertsDir, f);
+    try {
+      const stat = fs.statSync(fPath);
+      if (now - stat.mtimeMs > 24 * 3600 * 1000) {
+        fs.unlinkSync(fPath);
+      }
+    } catch (_) { /* ignore */ }
+  }
+} catch (_) { /* ignore */ }
 
 // 中间件
 app.use(express.json());

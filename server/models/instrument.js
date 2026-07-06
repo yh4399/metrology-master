@@ -215,7 +215,7 @@ const Instrument = {
       'installation_location', 'department',
       'certificate_number', 'inspection_date', 'valid_until',
       'inspection_result', 'inspection_unit', 'status', 'remark',
-      'extra_fields', 'photo_url'
+      'extra_fields', 'photo_url', 'certificate_file'
     ];
 
     const sets = [];
@@ -456,6 +456,51 @@ const Instrument = {
          AND status NOT IN ('scrapped')
        ORDER BY valid_until ASC`,
       [now]
+    );
+  },
+
+  // ======================== 模糊搜索（证书未匹配时查找候选器具） ========================
+  fuzzySearchBySerialNo(serialNo, category, keyword) {
+    const conditions = ['is_deleted = 0'];
+    const vals = [];
+
+    // 按类别筛选
+    if (category) {
+      conditions.push('category = ?');
+      vals.push(category);
+    }
+
+    // 关键词搜索（安装位置、型号、厂家）
+    if (keyword && String(keyword).trim()) {
+      const kw = '%' + String(keyword).trim() + '%';
+      conditions.push('(installation_location LIKE ? OR model LIKE ? OR manufacturer LIKE ?)');
+      vals.push(kw, kw, kw);
+    }
+
+    return queryAll(
+      `SELECT * FROM instruments WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT 50`,
+      vals
+    );
+  },
+
+  // ======================== 全库模糊搜索（不限类别，用于证书未匹配兜底） ========================
+  searchAllBySerialFuzzy(serialNo, pageSize) {
+    const limit = Math.min(pageSize || 30, 100);
+    const conditions = ['is_deleted = 0'];
+    const vals = [];
+
+    // 尝试模糊匹配出厂编号：包含关系或编辑距离
+    if (serialNo && String(serialNo).trim()) {
+      const sn = String(serialNo).trim();
+      // 去除连字符的版本
+      const snNoDash = sn.replace(/-/g, '');
+      conditions.push('(serial_number LIKE ? OR serial_number LIKE ? OR REPLACE(serial_number, \'-\', \'\') LIKE ?)');
+      vals.push('%' + sn + '%', sn + '%', '%' + snNoDash + '%');
+    }
+
+    return queryAll(
+      `SELECT * FROM instruments WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ?`,
+      [...vals, limit]
     );
   }
 };

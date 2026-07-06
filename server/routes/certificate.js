@@ -93,6 +93,16 @@ const PREFIX_CATEGORY_MAP = {
   'LZX': '流量计',
 };
 
+// 批量上传用临时目录 multer — 匹配失败时保留文件供后续修正
+const uploadTemp = multer({
+  dest: path.join(__dirname, '..', 'uploads', 'temp_certs'),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (path.extname(file.originalname).toLowerCase() === '.pdf') cb(null, true);
+    else cb(new Error('仅支持PDF文件'));
+  },
+});
+
 // ============ 从证书编号提取检验日期 ============
 // 支持格式：
 //   PREFIX-H1-ZX1-YYYYMMDDNN-...   → H1-ZX1标记后10位日期码的前8位（100%准确）
@@ -123,7 +133,7 @@ function calculateValidUntil(inspectionDate, category, classification) {
 
 // ============ POST /api/certificate/batch-upload ============
 // 批量上传PDF证书，自动提取出厂编号并匹配器具
-router.post('/batch-upload', auth, upload.array('files', 200), async (req, res) => {
+router.post('/batch-upload', auth, uploadTemp.array('files', 200), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ code: 400, message: '请上传PDF文件' });
@@ -260,6 +270,7 @@ router.post('/batch-upload', auth, upload.array('files', 200), async (req, res) 
             // 则无法确定正确的目标，标记为 unmatched 避免跨类别误写入
             if (fileResult.category === null) {
               fileResult.status = 'unmatched';
+              fileResult.tempFilePath = file.path; // 保留临时文件供后续修正
               fileResult.warning = `出厂编号 "${serialNumber}" 匹配到 ${instruments.length} 条不同类别的器具，无法自动确定目标。请手动确认类别后关联证书。`;
               unmatchedCount++;
             } else {
@@ -311,6 +322,7 @@ router.post('/batch-upload', auth, upload.array('files', 200), async (req, res) 
             }
           } else {
             fileResult.status = 'unmatched';
+            fileResult.tempFilePath = file.path; // 保留临时文件供后续修正
             unmatchedCount++;
           }
         } else {
@@ -580,6 +592,229 @@ router.post('/validity-rules/reset', auth, async (req, res) => {
     res.json({ code: 200, data: { rules }, message: '已重置为默认规则' });
   } catch (err) {
     res.status(500).json({ code: 500, message: '重置规则失败: ' + err.message });
+  }
+});
+
+// ============ 模糊匹配辅助函数 ============
+function levenshteinDistance(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1;
+    }
+  }
+  return dp[m][n];
+}
+
+function similarityScore(targetSN, candidateSN) {
+  const a = String(targetSN || '').replace(/-/g, '').toLowerCase();
+  const b = String(candidateSN || '').replace(/-/g, '').toLowerCase();
+  if (!a || !b) return 0;
+  const dist = levenshteinDistance(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen === 0 ? 1 : 1 - dist / maxLen;
+}
+
+// ============ 辅助：清理敏感字段用于响应 ============
+function sanitizeForResponse(record) {
+  if (!record) return null;
+  const clean = { ...record };
+  delete clean.photo_url;
+  delete clean.certificate_file;
+  return clean;
+}
+
+// ============ POST /api/certificate/unmatched-search ============
+// 证书未匹配时，搜索可能的匹配候选
+router.post('/unmatched-search', auth, async (req, res) => {
+  try {
+    const { serialNumber, certificateNumber, category, keyword } = req.body;
+    if (!serialNumber) {
+      return res.status(400).json({ code: 400, message: '请提供证书中的出厂编号' });
+    }
+
+    // 策略1：同类别 + 关键词
+    const candidates1 = Instrument.fuzzySearchBySerialNo(serialNumber, category || null, keyword || '');
+    // 策略2：全库模糊匹配
+    const candidates2 = category ? Instrument.searchAllBySerialFuzzy(serialNumber, 30) : [];
+    // 合并去重
+    const seen = new Set();
+    const allCandidates = [];
+    for (const c of [...candidates1, ...candidates2]) {
+      if (!seen.has(c.id)) { seen.add(c.id); allCandidates.push(c); }
+    }
+
+    // 计算相似度并排序
+    const scored = allCandidates.map(c => ({
+      id: c.id,
+      category: c.category,
+      serial_number: c.serial_number,
+      installation_location: c.installation_location || '',
+      model: c.model || '',
+      manufacturer: c.manufacturer || '',
+      similarity: similarityScore(serialNumber, c.serial_number)
+    }));
+
+    // 按相似度降序，取前 10 条
+    scored.sort((a, b) => b.similarity - a.similarity);
+    const candidates = scored.slice(0, 10);
+
+    res.json({ code: 200, data: { serialNumber, certificateNumber, category: category || null, candidates } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '搜索失败: ' + err.message });
+  }
+});
+
+// ============ POST /api/certificate/force-match ============
+// 以证书为准：将证书信息强制关联到指定器具
+router.post('/force-match', auth, async (req, res) => {
+  try {
+    const { certificateSerialNumber, certificateNumber, category, targetInstrumentId, updateSerialNumber, tempFilePath, inspectionDate, validUntil } = req.body;
+
+    const instrument = await Instrument.findById(targetInstrumentId);
+    if (!instrument) return res.status(404).json({ code: 404, message: '目标器具不存在或已在回收站' });
+
+    const oldSerialNumber = instrument.serial_number;
+
+    // 如果要求修正出厂编号，先检查新编号是否在同类别下已存在
+    if (updateSerialNumber && certificateSerialNumber) {
+      const dups = Instrument.findBySerialNoAndCategory(String(certificateSerialNumber), category || null);
+      const otherDups = (dups || []).filter(d => Number(d.id) !== Number(targetInstrumentId));
+      if (otherDups.length > 0) {
+        // 同类别下已有另一条器具使用了该编号，仍然允许但记录警告
+        console.warn('[force-match] 出厂编号 ' + certificateSerialNumber +
+          ' 在类别 "' + (category || '未知') + '" 下已存在器具 #' + otherDups.map(d => d.id).join(', '));
+      }
+    }
+
+    // 构建更新数据
+    const updateData = {};
+    if (updateSerialNumber && certificateSerialNumber) {
+      updateData.serial_number = String(certificateSerialNumber);
+    }
+    if (certificateNumber) {
+      updateData.certificate_number = String(certificateNumber);
+    }
+    if (inspectionDate) {
+      updateData.inspection_date = inspectionDate;
+    }
+    if (validUntil) {
+      updateData.valid_until = validUntil;
+    }
+
+    // 处理临时证书文件 → 移动到永久目录
+    if (tempFilePath) {
+      try {
+        const absTempPath = path.resolve(tempFilePath);
+        const tempDir = path.resolve(path.join(__dirname, '..', 'uploads', 'temp_certs'));
+        if (absTempPath.startsWith(tempDir + path.sep) && fs.existsSync(absTempPath)) {
+          const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(targetInstrumentId));
+          fs.mkdirSync(certDir, { recursive: true });
+          const safeCertNo = (certificateNumber || certificateSerialNumber || 'cert').replace(/[<>:"/\\|?*]/g, '_');
+          const destPath = path.join(certDir, safeCertNo + '.pdf');
+          fs.copyFileSync(absTempPath, destPath);
+          updateData.certificate_file = `/uploads/certificates/${targetInstrumentId}/${safeCertNo}.pdf`;
+          // 删除临时文件
+          try { fs.unlinkSync(absTempPath); } catch (_) { /* ignore */ }
+        }
+      } catch (fsErr) {
+        console.warn('[force-match] 证书文件处理失败:', fsErr.message);
+      }
+    }
+
+    const result = await Instrument.updateWithHistory(targetInstrumentId, updateData, {
+      source: 'certificate_correction',
+      operatorId: req.userId
+    });
+
+    res.json({
+      code: 200,
+      data: {
+        id: targetInstrumentId,
+        oldSerialNumber,
+        newSerialNumber: updateSerialNumber ? certificateSerialNumber : oldSerialNumber,
+        certificateNumber: certificateNumber || null,
+        inspectionDate: inspectionDate || null,
+        validUntil: validUntil || null,
+        historyId: result?.id || null
+      },
+      message: updateSerialNumber
+        ? `已修正器具 #${targetInstrumentId} 的出厂编号并关联证书`
+        : `已将证书关联到器具 #${targetInstrumentId}`
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '强制匹配失败: ' + err.message });
+  }
+});
+
+// ============ POST /api/certificate/create-from-cert ============
+// 用证书信息创建新器具
+router.post('/create-from-cert', auth, async (req, res) => {
+  try {
+    const { serialNumber, certificateNumber, category, inspectionDate, validUntil, tempFilePath, classification, location } = req.body;
+
+    if (!serialNumber) return res.status(400).json({ code: 400, message: '出厂编号不能为空' });
+    if (!category) return res.status(400).json({ code: 400, message: '器具类别不能为空' });
+
+    const data = {
+      serial_number: String(serialNumber),
+      category: String(category),
+      certificate_number: certificateNumber || null,
+      inspection_date: inspectionDate || null,
+      valid_until: validUntil || null,
+      installation_location: location || '',
+      status: 'active'
+    };
+
+    if (classification) {
+      const clsVal = String(classification).replace(/类/g, '').trim();
+      data.extra_fields = JSON.stringify({ classification: clsVal + '类' });
+    }
+
+    // 处理临时证书文件
+    const result = await Instrument.createWithHistory(data, {
+      source: 'certificate_create',
+      operatorId: req.userId
+    });
+
+    const newId = result.id;
+    let certFile = null;
+
+    if (tempFilePath) {
+      try {
+        const absTempPath = path.resolve(tempFilePath);
+        const tempDir = path.resolve(path.join(__dirname, '..', 'uploads', 'temp_certs'));
+        if (absTempPath.startsWith(tempDir + path.sep) && fs.existsSync(absTempPath)) {
+          const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(newId));
+          fs.mkdirSync(certDir, { recursive: true });
+          const safeCertNo = (certificateNumber || serialNumber || 'cert').replace(/[<>:"/\\|?*]/g, '_');
+          const destPath = path.join(certDir, safeCertNo + '.pdf');
+          fs.copyFileSync(absTempPath, destPath);
+          certFile = `/uploads/certificates/${newId}/${safeCertNo}.pdf`;
+          // 更新证书文件路径
+          Instrument.update(newId, { certificate_file: certFile });
+          try { fs.unlinkSync(absTempPath); } catch (_) { /* ignore */ }
+        }
+      } catch (fsErr) {
+        console.warn('[create-from-cert] 证书文件处理失败:', fsErr.message);
+      }
+    }
+
+    res.json({
+      code: 200,
+      data: {
+        id: newId,
+        serial_number: serialNumber,
+        certificate_number: certificateNumber || null,
+        certificate_file: certFile
+      },
+      message: '已根据证书信息创建新器具'
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '创建失败: ' + err.message });
   }
 });
 

@@ -182,3 +182,27 @@ export async function uploadCertificateForInstrument(id, file) {
   })
   return response.data
 }
+
+// ===== 证书未匹配处理 =====
+
+// 搜索未匹配证书的可能匹配目标
+export function searchUnmatchedCert(params) {
+  return request.post('/certificate/unmatched-search', params)
+}
+
+// 强制匹配：以证书为准修正器具
+export function forceMatchCert(data) {
+  return request.post('/certificate/force-match', data)
+}
+
+// 用证书信息创建新器具
+export function createInstrumentFromCert(data) {
+  return request.post('/certificate/create-from-cert', data)
+}
+
+// ===== 导入冲突处理 =====
+
+// 解决导入冲突
+export function resolveImportConflicts(data) {
+  return request.post('/instruments/import/resolve-conflicts', data)
+}

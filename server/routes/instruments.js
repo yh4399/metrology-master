@@ -969,6 +969,16 @@ router.post('/import/confirm', async (req, res) => {
   }
 });
 
+// ============ POST /api/instruments/import/resolve-conflicts ============
+// 处理导入时出厂编号冲突，用户选择策略后提交
+router.post('/import/resolve-conflicts', async (req, res) => {
+  try {
+    return await handleResolveConflicts(req, res);
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '冲突处理失败: ' + err.message });
+  }
+});
+
 function uploadDir() {
   return path.join(__dirname, '..', 'uploads');
 }
@@ -1047,8 +1057,9 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
   let totalFail = 0;
   const allErrors = [];
   const sheetResults = [];
+  const allCollectedRows = []; // { data, sheetName, sheetCategory, rowNum }
 
-  // 逐Sheet处理，每个Sheet使用自己的mapping和category
+  // === Phase 1: 解析所有行，收集有效数据 ===
   for (const sm of sheetMappings) {
     const { sheetName: targetSheet, category: sheetCategory, mapping: sheetMapping } = sm;
 
@@ -1060,7 +1071,6 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
     const worksheet = workbook.Sheets[targetSheet];
     const raw = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
 
-    // 过滤空行
     const nonEmpty = raw.filter(row =>
       row.some(cell => cell !== '' && cell !== undefined && cell !== null)
     );
@@ -1070,7 +1080,6 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
       continue;
     }
 
-    // 智能检测表头行（复用excelService中的detectHeaderRow逻辑）
     const headerResult = detectHeaderFromRows(nonEmpty);
     const headers = headerResult.headers;
     const headerRowIdx = headerResult.headerRowIdx;
@@ -1087,34 +1096,32 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
         row, headers, sheetMapping, headerRowIdx + i + 2
       );
 
-      // 注入类别
       if (!data.category && sheetCategory) {
         data.category = sheetCategory;
       }
 
-      // 移除applyMapping中的"类别不能为空"错误
       const filteredErrors = rowErrors.filter(e => !e.includes('类别不能为空'));
 
       if (filteredErrors.length > 0) {
         failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: filteredErrors });
+        allErrors.push({ row: '[' + targetSheet + '] 第' + (headerRowIdx + i + 2) + '行', errors: filteredErrors });
         continue;
       }
 
       if (!data.category) {
         failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: ['类别未映射或为空，请在上一步选择类别'] });
+        allErrors.push({ row: '[' + targetSheet + '] 第' + (headerRowIdx + i + 2) + '行', errors: ['类别未映射或为空，请在上一步选择类别'] });
         continue;
       }
 
-      try {
-        applySmartInspectionDate(data);
-        await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
-        successCount++;
-      } catch (e) {
-        failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: [e.message] });
-      }
+      applySmartInspectionDate(data);
+      allCollectedRows.push({
+        data,
+        sheetName: targetSheet,
+        sheetCategory,
+        rowNum: headerRowIdx + i + 2
+      });
+      successCount++;
     }
 
     totalSuccess += successCount;
@@ -1122,26 +1129,110 @@ async function handleMultiSheetImport(req, res, filePath, fileName, sheetMapping
     sheetResults.push({ sheet: targetSheet, successRows: successCount, failRows: failCount });
   }
 
-  // 记录导入日志
+  // === Phase 2: 冲突检测 ===
+  const conflicts = [];
+  const okRows = [];
+
+  for (const item of allCollectedRows) {
+    const { data } = item;
+    if (!data.serial_number) {
+      // 无编号的行直接通过（不参与冲突检测）
+      okRows.push(item);
+      continue;
+    }
+
+    const existing = await Instrument.findBySerialNo(String(data.serial_number));
+    if (existing) {
+      const conflictFields = buildConflictFields(data, existing);
+      conflicts.push({
+        index: conflicts.length,
+        sourceSheet: item.sheetName,
+        sourceRow: item.rowNum,
+        importData: data,
+        existingRecord: sanitizeImportForResponse(existing),
+        conflictFields
+      });
+    } else {
+      okRows.push(item);
+    }
+  }
+
+  // === Phase 3: 处理 ===
+  if (conflicts.length === 0) {
+    // 无冲突：全部直接导入
+    let importSuccess = 0, importFail = 0;
+    for (const item of okRows) {
+      try {
+        await Instrument.createWithHistory(item.data, { source: 'excel_import', operatorId: req.userId });
+        importSuccess++;
+      } catch (e) {
+        importFail++;
+        allErrors.push({ row: '[' + item.sheetName + '] 第' + item.rowNum + '行', errors: [e.message] });
+      }
+    }
+
+    totalSuccess = importSuccess;
+    totalFail += importFail;
+
+    await Instrument.createImportLog({
+      file_name: (fileName || path.basename(filePath)) + ' [' + sheetNamesToImport.join(', ') + ']',
+      total_rows: totalSuccess + totalFail,
+      success_rows: totalSuccess,
+      fail_rows: totalFail,
+      error_detail: allErrors
+    });
+
+    try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+    return res.json({
+      code: 200,
+      data: {
+        sheets: sheetResults,
+        totalRows: totalSuccess + totalFail,
+        successRows: totalSuccess,
+        failRows: totalFail,
+        errors: allErrors
+      }
+    });
+  }
+
+  // 有冲突：先导入无冲突的行
+  let importSuccess = 0, importFail = 0;
+  for (const item of okRows) {
+    try {
+      await Instrument.createWithHistory(item.data, { source: 'excel_import', operatorId: req.userId });
+      importSuccess++;
+    } catch (e) {
+      importFail++;
+      allErrors.push({ row: '[' + item.sheetName + '] 第' + item.rowNum + '行', errors: [e.message] });
+    }
+  }
+
+  // 不删除临时文件 — 冲突解决时需要重新读取
+  // 记录导入日志（部分成功 + 待处理冲突）
   await Instrument.createImportLog({
-    file_name: (fileName || path.basename(filePath)) + ' [' + sheetNamesToImport.join(', ') + ']',
-    total_rows: totalSuccess + totalFail,
-    success_rows: totalSuccess,
-    fail_rows: totalFail,
+    file_name: (fileName || path.basename(filePath)) + ' [部分导入，' + conflicts.length + '条冲突待处理]',
+    total_rows: importSuccess + importFail + conflicts.length,
+    success_rows: importSuccess,
+    fail_rows: importFail,
     error_detail: allErrors
   });
 
-  // 清理临时文件
-  try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
-
-  res.json({
+  return res.json({
     code: 200,
     data: {
       sheets: sheetResults,
       totalRows: totalSuccess + totalFail,
-      successRows: totalSuccess,
-      failRows: totalFail,
-      errors: allErrors
+      successRows: importSuccess,
+      failRows: importFail,
+      errors: allErrors,
+      needsResolution: true,
+      conflictCount: conflicts.length,
+      conflicts,
+      conflictFileData: {
+        fileName: fileName || path.basename(filePath),
+        filePath
+      }
     }
   });
 }
@@ -1188,7 +1279,9 @@ async function handleLegacyImport(req, res, filePath, fileName, sheetsToImport, 
   let totalFail = 0;
   const allErrors = [];
   const sheetResults = [];
+  const allCollectedRows = [];
 
+  // === Phase 1: 解析所有行 ===
   for (const targetSheet of sheetsToImport) {
     const worksheet = workbook.Sheets[targetSheet];
     const raw = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
@@ -1226,24 +1319,23 @@ async function handleLegacyImport(req, res, filePath, fileName, sheetsToImport, 
 
       if (filteredErrors.length > 0) {
         failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: filteredErrors });
+        allErrors.push({ row: '[' + targetSheet + '] 第' + (headerRowIdx + i + 2) + '行', errors: filteredErrors });
         continue;
       }
 
       if (!data.category) {
         failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: ['类别未映射或为空，请在上一步选择类别'] });
+        allErrors.push({ row: '[' + targetSheet + '] 第' + (headerRowIdx + i + 2) + '行', errors: ['类别未映射或为空，请在上一步选择类别'] });
         continue;
       }
 
-      try {
-        applySmartInspectionDate(data);
-        await Instrument.createWithHistory(data, { source: 'excel_import', operatorId: req.userId });
-        successCount++;
-      } catch (e) {
-        failCount++;
-        allErrors.push({ row: `[${targetSheet}] 第${headerRowIdx + i + 2}行`, errors: [e.message] });
-      }
+      applySmartInspectionDate(data);
+      allCollectedRows.push({
+        data,
+        sheetName: targetSheet,
+        rowNum: headerRowIdx + i + 2
+      });
+      successCount++;
     }
 
     totalSuccess += successCount;
@@ -1251,24 +1343,106 @@ async function handleLegacyImport(req, res, filePath, fileName, sheetsToImport, 
     sheetResults.push({ sheet: targetSheet, successRows: successCount, failRows: failCount });
   }
 
+  // === Phase 2: 冲突检测 ===
+  const conflicts = [];
+  const okRows = [];
+
+  for (const item of allCollectedRows) {
+    const { data } = item;
+    if (!data.serial_number) {
+      okRows.push(item);
+      continue;
+    }
+
+    const existing = await Instrument.findBySerialNo(String(data.serial_number));
+    if (existing) {
+      const conflictFields = buildConflictFields(data, existing);
+      conflicts.push({
+        index: conflicts.length,
+        sourceSheet: item.sheetName,
+        sourceRow: item.rowNum,
+        importData: data,
+        existingRecord: sanitizeImportForResponse(existing),
+        conflictFields
+      });
+    } else {
+      okRows.push(item);
+    }
+  }
+
+  // === Phase 3: 处理 ===
+  if (conflicts.length === 0) {
+    let importSuccess = 0, importFail = 0;
+    for (const item of okRows) {
+      try {
+        await Instrument.createWithHistory(item.data, { source: 'excel_import', operatorId: req.userId });
+        importSuccess++;
+      } catch (e) {
+        importFail++;
+        allErrors.push({ row: '[' + item.sheetName + '] 第' + item.rowNum + '行', errors: [e.message] });
+      }
+    }
+
+    totalSuccess = importSuccess;
+    totalFail += importFail;
+
+    await Instrument.createImportLog({
+      file_name: (fileName || path.basename(filePath)) + ' [' + sheetsToImport.join(', ') + ']',
+      total_rows: totalSuccess + totalFail,
+      success_rows: totalSuccess,
+      fail_rows: totalFail,
+      error_detail: allErrors
+    });
+
+    try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+    return res.json({
+      code: 200,
+      data: {
+        sheets: sheetResults,
+        totalRows: totalSuccess + totalFail,
+        successRows: totalSuccess,
+        failRows: totalFail,
+        errors: allErrors
+      }
+    });
+  }
+
+  // 有冲突：先导入无冲突的行
+  let importSuccess = 0, importFail = 0;
+  for (const item of okRows) {
+    try {
+      await Instrument.createWithHistory(item.data, { source: 'excel_import', operatorId: req.userId });
+      importSuccess++;
+    } catch (e) {
+      importFail++;
+      allErrors.push({ row: '[' + item.sheetName + '] 第' + item.rowNum + '行', errors: [e.message] });
+    }
+  }
+
   await Instrument.createImportLog({
-    file_name: (fileName || path.basename(filePath)) + ' [' + sheetsToImport.join(', ') + ']',
-    total_rows: totalSuccess + totalFail,
-    success_rows: totalSuccess,
-    fail_rows: totalFail,
+    file_name: (fileName || path.basename(filePath)) + ' [部分导入，' + conflicts.length + '条冲突待处理]',
+    total_rows: importSuccess + importFail + conflicts.length,
+    success_rows: importSuccess,
+    fail_rows: importFail,
     error_detail: allErrors
   });
 
-  try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
-
-  res.json({
+  return res.json({
     code: 200,
     data: {
       sheets: sheetResults,
       totalRows: totalSuccess + totalFail,
-      successRows: totalSuccess,
-      failRows: totalFail,
-      errors: allErrors
+      successRows: importSuccess,
+      failRows: importFail,
+      errors: allErrors,
+      needsResolution: true,
+      conflictCount: conflicts.length,
+      conflicts,
+      conflictFileData: {
+        fileName: fileName || path.basename(filePath),
+        filePath
+      }
     }
   });
 }
@@ -1820,6 +1994,140 @@ function parseInstrumentText(text) {
   }
 
   return result;
+}
+
+// ============ 导入冲突检测辅助 ============
+function normalizeForCompare(val) {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'number') return String(val);
+  return String(val).trim();
+}
+
+function buildConflictFields(importData, existingRecord) {
+  const comparableFields = [
+    { field: 'category', label: '类别' },
+    { field: 'model', label: '型号' },
+    { field: 'manufacturer', label: '生产厂家' },
+    { field: 'installation_location', label: '安装位置' },
+    { field: 'inspection_date', label: '检验日期' },
+    { field: 'valid_until', label: '有效日期' },
+    { field: 'certificate_number', label: '证书编号' },
+    { field: 'range_min', label: '量程下限' },
+    { field: 'range_max', label: '量程上限' },
+    { field: 'range_unit', label: '量程单位' },
+    { field: 'accuracy_class', label: '准确度' },
+    { field: 'inspection_unit', label: '检定单位' },
+    { field: 'department', label: '部门' },
+    { field: 'status', label: '状态' },
+  ];
+
+  const conflicts = [];
+  for (const { field, label } of comparableFields) {
+    const sysVal = existingRecord[field];
+    const impVal = importData[field];
+    if (normalizeForCompare(sysVal) !== normalizeForCompare(impVal)) {
+      conflicts.push({
+        field, label,
+        systemValue: sysVal != null ? sysVal : '',
+        importValue: impVal != null ? impVal : ''
+      });
+    }
+  }
+  return conflicts;
+}
+
+function sanitizeImportForResponse(record) {
+  if (!record) return null;
+  const clean = { ...record };
+  delete clean.photo_url;
+  delete clean.certificate_file;
+  return clean;
+}
+
+// ============ POST /api/instruments/import/resolve-conflicts ============
+async function handleResolveConflicts(req, res) {
+  const { filePath: clientFilePath, fileName, sheetMappings, resolutions } = req.body;
+
+  if (!resolutions || !Array.isArray(resolutions) || resolutions.length === 0) {
+    return res.status(400).json({ code: 400, message: '请提供冲突处理策略' });
+  }
+
+  let filePath;
+  if (clientFilePath) {
+    const absPath = path.resolve(clientFilePath);
+    const baseDir = path.resolve(uploadDir());
+    if (!absPath.startsWith(baseDir + path.sep) && absPath !== baseDir) {
+      return res.status(400).json({ code: 400, message: '文件路径不合法' });
+    }
+    if (!fs.existsSync(absPath)) {
+      return res.status(400).json({ code: 400, message: '上传文件已过期或不存在，请重新上传' });
+    }
+    filePath = absPath;
+  } else {
+    return res.status(400).json({ code: 400, message: '缺少文件路径，请重新上传并导入' });
+  }
+
+  let updated = 0, skipped = 0, kept = 0, created = 0;
+  const errors = [];
+
+  for (const resolution of resolutions) {
+    try {
+      switch (resolution.action) {
+        case 'update': {
+          const existing = await Instrument.findById(resolution.existingId);
+          if (!existing) {
+            errors.push({ index: resolution.index, error: '目标器具 #' + resolution.existingId + ' 不存在或已在回收站' });
+            skipped++;
+            break;
+          }
+          const updateData = { ...resolution.importData };
+          delete updateData.serial_number;
+          delete updateData.id;
+          if (updateData.extra_fields && typeof updateData.extra_fields === 'object') {
+            updateData.extra_fields = JSON.stringify(updateData.extra_fields);
+          }
+          await Instrument.updateWithHistory(resolution.existingId, updateData, {
+            source: 'excel_import_overwrite',
+            operatorId: req.userId
+          });
+          updated++;
+          break;
+        }
+        case 'create_new': {
+          const data = { ...resolution.importData };
+          delete data.id;
+          if (data.extra_fields && typeof data.extra_fields === 'object') {
+            data.extra_fields = JSON.stringify(data.extra_fields);
+          }
+          await Instrument.createWithHistory(data, {
+            source: 'excel_import',
+            operatorId: req.userId
+          });
+          created++;
+          break;
+        }
+        case 'skip':
+          skipped++;
+          break;
+        case 'keep':
+          kept++;
+          break;
+        default:
+          skipped++;
+          break;
+      }
+    } catch (err) {
+      errors.push({ index: resolution.index, error: err.message });
+    }
+  }
+
+  try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+  res.json({
+    code: 200,
+    data: { updated, skipped, kept, created, totalProcessed: resolutions.length, errors },
+    message: '冲突处理完成：更新 ' + updated + ' 条，跳过 ' + skipped + ' 条，保留 ' + kept + ' 条，新建 ' + created + ' 条'
+  });
 }
 
 module.exports = router;

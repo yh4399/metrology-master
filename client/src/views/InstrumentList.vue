@@ -268,7 +268,27 @@
                   <el-tag size="small" type="success">✅ {{ row.matchedInstrument?.serial_number }}</el-tag>
                 </template>
                 <template v-else-if="row.status === 'unmatched'">
-                  <el-tag size="small" type="warning">⚠ 未找到对应器具</el-tag>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <el-tag size="small" type="warning">⚠ 未匹配</el-tag>
+                    <el-dropdown trigger="click" @command="(cmd) => handleUnmatchedAction(cmd, row)">
+                      <el-button link size="small" type="primary">
+                        处理 <el-icon><ArrowDown /></el-icon>
+                      </el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="search">
+                            <el-icon><Search /></el-icon> 模糊搜索匹配
+                          </el-dropdown-item>
+                          <el-dropdown-item command="manual">
+                            <el-icon><List /></el-icon> 手动选择器具
+                          </el-dropdown-item>
+                          <el-dropdown-item command="create" divided>
+                            <el-icon><Plus /></el-icon> 用证书信息新建器具
+                          </el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </div>
                 </template>
                 <template v-else>
                   <el-tag size="small" type="danger">❌ {{ row.error || '解析失败' }}</el-tag>
@@ -299,6 +319,163 @@
         >
           <el-icon><UploadFilled /></el-icon>
           上传并匹配（{{ batchFiles.length }} 个文件）
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 未匹配证书 → 模糊搜索匹配对话框 -->
+    <el-dialog v-model="fuzzyMatchVisible" title="🔍 查找匹配器具" width="750px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
+        证书出厂编号：<code>{{ activeUnmatched?.serialNumber }}</code>，
+        类别：<el-tag size="small">{{ activeUnmatched?.category || '未知' }}</el-tag>
+      </el-alert>
+      <el-input v-model="fuzzySearchKeyword" placeholder="输入安装位置、型号等辅助搜索…" clearable
+        @input="onFuzzySearchDebounce" style="margin-bottom:12px">
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <el-table :data="fuzzyCandidates" @row-dblclick="(c) => confirmFuzzyMatch(c)"
+        highlight-current-row max-height="380" size="small" v-loading="fuzzySearching">
+        <el-table-column label="操作" width="75" align="center">
+          <template #default="{ row: candidate }">
+            <el-button size="small" type="primary" @click="confirmFuzzyMatch(candidate)">匹配</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column prop="category" label="类别" width="130" />
+        <el-table-column prop="serial_number" label="出厂编号" width="170">
+          <template #default="{ row: candidate }">
+            <span :style="{ color: candidate.similarity < 1 ? '#e6a23c' : '' }">
+              {{ candidate.serial_number }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="installation_location" label="安装位置" min-width="150" />
+        <el-table-column prop="model" label="型号" width="120" />
+        <el-table-column label="相似度" width="90" align="center">
+          <template #default="{ row: candidate }">
+            <el-progress :percentage="Math.round(candidate.similarity * 100)"
+              :status="candidate.similarity >= 0.9 ? 'success' : ''"
+              :stroke-width="8" :show-text="false" />
+            <small>{{ Math.round(candidate.similarity * 100) }}%</small>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="fuzzyCandidates.length === 0 && fuzzySearched" style="text-align:center;padding:32px;color:#909399">
+        未找到匹配的器具，建议
+        <el-button link type="primary" @click="fuzzyMatchVisible = false; createFromCert(activeUnmatched)">
+          用证书信息新建器具
+        </el-button>
+      </div>
+      <template #footer>
+        <el-button @click="fuzzyMatchVisible = false">取消</el-button>
+        <el-button type="success" @click="fuzzyMatchVisible = false; createFromCert(activeUnmatched)">
+          用证书信息新建器具
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 未匹配证书 → 确认以证书为准修正 -->
+    <el-dialog v-model="confirmMatchVisible" title="⚠ 确认以证书为准修正" width="500px" :close-on-click-modal="false">
+      <div style="line-height:2.2">
+        <p>即将将以下器具关联到证书：</p>
+        <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:13px">
+          <tr><td style="color:#909399;padding:4px 8px">证书出厂编号</td>
+            <td style="font-weight:bold;color:#409EFF;padding:4px 8px">{{ activeUnmatched?.serialNumber }}</td></tr>
+          <tr><td style="color:#909399;padding:4px 8px">证书编号</td>
+            <td style="padding:4px 8px;word-break:break-all">{{ activeUnmatched?.certificateNumber }}</td></tr>
+          <tr v-if="activeUnmatched?.extractedInspectionDate" style="background:#f0f9eb">
+            <td style="color:#909399;padding:4px 8px">证书检验日期</td>
+            <td style="font-weight:bold;color:#67c23a;padding:4px 8px">{{ activeUnmatched?.extractedInspectionDate }}</td></tr>
+          <tr v-if="activeUnmatched?.calculatedValidUntil" style="background:#f0f9eb">
+            <td style="color:#909399;padding:4px 8px">计算有效日期</td>
+            <td style="font-weight:bold;color:#67c23a;padding:4px 8px">{{ activeUnmatched?.calculatedValidUntil }}</td></tr>
+          <tr style="background:#fef0f0">
+            <td style="color:#909399;padding:4px 8px">系统当前出厂编号</td>
+            <td style="font-weight:bold;color:#e6a23c;padding:4px 8px">{{ confirmMatchTarget?.serial_number }}</td></tr>
+          <tr><td style="color:#909399;padding:4px 8px">器具类别</td>
+            <td style="padding:4px 8px">{{ confirmMatchTarget?.category }}</td></tr>
+          <tr><td style="color:#909399;padding:4px 8px">安装位置</td>
+            <td style="padding:4px 8px">{{ confirmMatchTarget?.installation_location || '-' }}</td></tr>
+          <tr><td style="color:#909399;padding:4px 8px">型号</td>
+            <td style="padding:4px 8px">{{ confirmMatchTarget?.model || '-' }}</td></tr>
+        </table>
+        <el-checkbox v-model="confirmUpdateSerial">
+          同时将出厂编号修改为 <code>{{ activeUnmatched?.serialNumber }}</code>（以证书为准）
+        </el-checkbox>
+        <el-alert type="warning" :closable="false" show-icon style="margin-top:12px">
+          此操作将修改台账数据，修改记录会写入变更历史。
+        </el-alert>
+      </div>
+      <template #footer>
+        <el-button @click="confirmMatchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="forceMatching" @click="executeForceMatch">确认修正</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 未匹配证书 → 手动选择器具 -->
+    <el-dialog v-model="manualMatchVisible" title="📋 手动选择目标器具" width="820px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom:16px">
+        证书出厂编号：<code>{{ activeUnmatched?.serialNumber }}</code>，请选择要关联的器具
+      </el-alert>
+      <el-input v-model="manualSearchKeyword" placeholder="搜索出厂编号/型号/位置…" clearable
+        @input="onManualSearch" style="margin-bottom:12px">
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <el-table :data="manualCandidates" highlight-current-row max-height="400" size="small"
+        v-loading="manualSearching" @row-click="selectManualTarget">
+        <el-table-column label="选择" width="60" align="center">
+          <template #default="{ row }">
+            <el-radio :model-value="manualTarget?.id" :value="row.id" @change="selectManualTarget(row)" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="category" label="类别" width="130" />
+        <el-table-column prop="serial_number" label="出厂编号" width="170" />
+        <el-table-column prop="installation_location" label="安装位置" min-width="150" />
+        <el-table-column prop="model" label="型号" width="120" />
+        <el-table-column prop="manufacturer" label="厂家" width="120" />
+      </el-table>
+      <template #footer>
+        <el-button @click="manualMatchVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!manualTarget" @click="confirmManualMatch">
+          确认选择并关联证书
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 未匹配证书 → 新建器具 -->
+    <el-dialog v-model="createFromCertVisible" title="📝 用证书信息新建器具" width="520px" :close-on-click-modal="false">
+      <el-form :model="newFromCertForm" label-width="90px" size="default">
+        <el-form-item label="器具类别">
+          <el-select v-model="newFromCertForm.category" filterable allow-create style="width:100%">
+            <el-option v-for="cat in categories" :key="cat" :label="cat" :value="cat" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="出厂编号">
+          <el-input :model-value="newFromCertForm.serialNumber" disabled />
+        </el-form-item>
+        <el-form-item label="证书编号">
+          <el-input :model-value="newFromCertForm.certificateNumber" disabled />
+        </el-form-item>
+        <el-form-item label="检验日期">
+          <el-input :model-value="newFromCertForm.inspectionDate" disabled />
+        </el-form-item>
+        <el-form-item label="有效日期">
+          <el-input :model-value="newFromCertForm.validUntil" disabled />
+        </el-form-item>
+        <el-form-item label="分类管理">
+          <el-select v-model="newFromCertForm.classification" clearable style="width:100%">
+            <el-option label="A 类" value="A类" />
+            <el-option label="B 类" value="B类" />
+            <el-option label="C 类" value="C类" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="安装位置">
+          <el-input v-model="newFromCertForm.location" placeholder="选填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createFromCertVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creatingFromCert" @click="executeCreateFromCert">
+          创建器具并关联证书
         </el-button>
       </template>
     </el-dialog>
@@ -793,10 +970,10 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Search, Plus, Upload, Download, Refresh, Edit, Delete, PictureFilled, DArrowRight, Camera, FolderOpened, ArrowDown, UploadFilled, FolderDelete, Warning, Filter, Select, Document, Setting, FolderAdd
+  Search, Plus, Upload, Download, Refresh, Edit, Delete, PictureFilled, DArrowRight, Camera, FolderOpened, ArrowDown, UploadFilled, FolderDelete, Warning, Filter, Select, Document, Setting, FolderAdd, List
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats, checkCertDates, batchUpdateCertDates, getValidityRules, createValidityRule, updateValidityRule, deleteValidityRule, resetValidityRules, uploadCertificateForInstrument } from '../api/instruments'
+import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats, checkCertDates, batchUpdateCertDates, getValidityRules, createValidityRule, updateValidityRule, deleteValidityRule, resetValidityRules, uploadCertificateForInstrument, searchUnmatchedCert, forceMatchCert, createInstrumentFromCert } from '../api/instruments'
 import { STATUS_OPTIONS, STATUS_MAP, CATEGORIES, getCategoryColor } from '../utils/constants'
 import { useAuthStore } from '../stores/auth'
 import InstrumentHistoryDrawer from '../components/InstrumentHistoryDrawer.vue'
@@ -832,6 +1009,27 @@ const batchSummary = ref({ matched: 0, unmatched: 0, error: 0 })
 
 // === 单证书上传 ===
 const certInputRefs = ref({})
+
+// === 未匹配证书处理 ===
+const fuzzyMatchVisible = ref(false)
+const confirmMatchVisible = ref(false)
+const manualMatchVisible = ref(false)
+const createFromCertVisible = ref(false)
+const activeUnmatched = ref(null)
+const confirmMatchTarget = ref(null)
+const confirmUpdateSerial = ref(false)
+const fuzzySearchKeyword = ref('')
+const fuzzyCandidates = ref([])
+const fuzzySearching = ref(false)
+const fuzzySearched = ref(false)
+let fuzzySearchTimer = null
+const forceMatching = ref(false)
+const manualSearchKeyword = ref('')
+const manualCandidates = ref([])
+const manualTarget = ref(null)
+const manualSearching = ref(false)
+const newFromCertForm = ref({ category: '', serialNumber: '', certificateNumber: '', inspectionDate: '', validUntil: '', classification: '', location: '' })
+const creatingFromCert = ref(false)
 
 // === 证书日期校验 ===
 const certCheckVisible = ref(false)
@@ -1461,6 +1659,168 @@ function clearBatchResults() {
   batchResults.value = null
   batchSummary.value = { matched: 0, unmatched: 0, error: 0 }
   batchProgress.value = 0
+}
+
+// === 未匹配证书处理 ===
+function handleUnmatchedAction(cmd, row) {
+  activeUnmatched.value = row
+  confirmUpdateSerial.value = false
+  switch (cmd) {
+    case 'search':
+      fuzzySearchKeyword.value = ''
+      fuzzyCandidates.value = []
+      fuzzySearched.value = false
+      fuzzyMatchVisible.value = true
+      searchFuzzyMatch()
+      break
+    case 'manual':
+      manualSearchKeyword.value = ''
+      manualTarget.value = null
+      manualMatchVisible.value = true
+      loadManualCandidates()
+      break
+    case 'create':
+      newFromCertForm.value = {
+        category: row.category || '',
+        serialNumber: row.serialNumber || '',
+        certificateNumber: row.certificateNumber || '',
+        inspectionDate: row.extractedInspectionDate || '',
+        validUntil: row.calculatedValidUntil || '',
+        classification: '',
+        location: ''
+      }
+      createFromCertVisible.value = true
+      break
+  }
+}
+
+async function searchFuzzyMatch() {
+  if (!activeUnmatched.value) return
+  fuzzySearching.value = true
+  fuzzySearched.value = true
+  try {
+    const res = await searchUnmatchedCert({
+      serialNumber: activeUnmatched.value.serialNumber,
+      certificateNumber: activeUnmatched.value.certificateNumber,
+      category: activeUnmatched.value.category,
+      keyword: fuzzySearchKeyword.value
+    })
+    fuzzyCandidates.value = res.data.candidates || []
+  } catch (err) {
+    ElMessage.error('搜索失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    fuzzySearching.value = false
+  }
+}
+
+function onFuzzySearchDebounce() {
+  if (fuzzySearchTimer) clearTimeout(fuzzySearchTimer)
+  fuzzySearchTimer = setTimeout(() => searchFuzzyMatch(), 400)
+}
+
+function confirmFuzzyMatch(candidate) {
+  confirmMatchTarget.value = candidate
+  confirmUpdateSerial.value = candidate.similarity < 1
+  confirmMatchVisible.value = true
+}
+
+async function executeForceMatch() {
+  if (!activeUnmatched.value || !confirmMatchTarget.value) return
+  forceMatching.value = true
+  try {
+    const res = await forceMatchCert({
+      certificateSerialNumber: activeUnmatched.value.serialNumber,
+      certificateNumber: activeUnmatched.value.certificateNumber,
+      category: activeUnmatched.value.category,
+      targetInstrumentId: confirmMatchTarget.value.id,
+      updateSerialNumber: confirmUpdateSerial.value,
+      tempFilePath: activeUnmatched.value.tempFilePath,
+      inspectionDate: activeUnmatched.value.extractedInspectionDate || null,
+      validUntil: activeUnmatched.value.calculatedValidUntil || null
+    })
+    ElMessage.success(res.message || '已关联证书')
+    confirmMatchVisible.value = false
+    fuzzyMatchVisible.value = false
+    manualMatchVisible.value = false
+    // 从 batchResults 中移除已处理的条目
+    if (batchResults.value) {
+      const idx = batchResults.value.findIndex(r => r === activeUnmatched.value)
+      if (idx >= 0) {
+        batchResults.value[idx].status = 'matched'
+        batchResults.value[idx].matchedInstrument = { serial_number: confirmMatchTarget.value.serial_number }
+        batchSummary.value.matched++
+        batchSummary.value.unmatched--
+      }
+    }
+    fetchList()
+  } catch (err) {
+    ElMessage.error('修正失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    forceMatching.value = false
+  }
+}
+
+async function loadManualCandidates() {
+  manualSearching.value = true
+  try {
+    const keyword = manualSearchKeyword.value || ''
+    const res = await getInstruments({ pageSize: 50, keyword: keyword || undefined })
+    manualCandidates.value = res.data.list || []
+  } catch (err) {
+    ElMessage.error('加载失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    manualSearching.value = false
+  }
+}
+
+function onManualSearch() {
+  loadManualCandidates()
+}
+
+function selectManualTarget(row) {
+  manualTarget.value = row
+}
+
+function confirmManualMatch() {
+  if (!manualTarget.value) return
+  confirmMatchTarget.value = manualTarget.value
+  confirmUpdateSerial.value = true
+  confirmMatchVisible.value = true
+}
+
+async function executeCreateFromCert() {
+  const form = newFromCertForm.value
+  if (!form.category) { ElMessage.warning('请选择器具类别'); return }
+  creatingFromCert.value = true
+  try {
+    const res = await createInstrumentFromCert({
+      serialNumber: form.serialNumber,
+      certificateNumber: form.certificateNumber,
+      category: form.category,
+      inspectionDate: form.inspectionDate || null,
+      validUntil: form.validUntil || null,
+      classification: form.classification || null,
+      location: form.location || '',
+      tempFilePath: activeUnmatched.value?.tempFilePath
+    })
+    ElMessage.success(res.message || '已创建器具并关联证书')
+    createFromCertVisible.value = false
+    // 标记已处理
+    if (batchResults.value && activeUnmatched.value) {
+      const idx = batchResults.value.findIndex(r => r === activeUnmatched.value)
+      if (idx >= 0) {
+        batchResults.value[idx].status = 'matched'
+        batchResults.value[idx].matchedInstrument = { serial_number: form.serialNumber }
+        batchSummary.value.matched++
+        batchSummary.value.unmatched--
+      }
+    }
+    fetchList()
+  } catch (err) {
+    ElMessage.error('创建失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    creatingFromCert.value = false
+  }
 }
 
 // === 证书日期校验 ===
