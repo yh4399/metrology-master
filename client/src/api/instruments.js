@@ -216,6 +216,10 @@ export function resolveImportConflicts(data) {
 export async function getLedgerInfo() {
   return request.get('/instruments/ledger/info')
 }
+export async function viewLedgerData(file) {
+  const params = file ? { file } : {}
+  return request.get('/instruments/ledger/view', { params })
+}
 export async function uploadLedger(file) {
   const authStore = useAuthStore()
   const formData = new FormData()
@@ -224,6 +228,18 @@ export async function uploadLedger(file) {
     headers: { Authorization: 'Bearer ' + authStore.token }
   })
   return response.data
+}
+export function addLedgerRow(data) {
+  return request.post('/instruments/ledger/row', data)
+}
+export function updateLedgerRow(data) {
+  return request.put('/instruments/ledger/row', data)
+}
+export function deleteLedgerRow(params) {
+  return request.delete('/instruments/ledger/row', { params })
+}
+export function deleteLedgerFile(params) {
+  return request.delete('/instruments/ledger', { params })
 }
 
 // ===== 送检批次管理 =====

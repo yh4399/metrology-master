@@ -338,3 +338,76 @@
 | 2026-06-30 | Workflow 脚本模板字面量导致解析错误 | 1 | 改用字符串拼接避免反引号 |
 | 2026-06-30 | 审查发现 blob URL 被追加 token 导致裂图 | 1 | url.startsWith('blob:') 跳过 |
 | 2026-06-30 | 审查发现证书警告文本与实际行为不一致 | 1 | 拆分分支 + 修正文本 |
+
+---
+
+## 会话：2026-07-07（送检工作台 + 台账存储 + 导出完善）
+
+### 阶段 1：送检批次工作台
+- **状态：** complete
+- 设计文档：[design-inspection-workspace.md](docs/design-inspection-workspace.md)
+- 新建 InspectionWorkspace.vue（批次列表 + 工作区双模式）
+- 预警页 + 台账列表增加送检工作台入口（无需选择器具也可进入）
+- 创建/修改的文件：
+  - `client/src/views/InspectionWorkspace.vue`（新建，~500行）
+  - `client/src/router/index.js`（修改，新增路由）
+  - `client/src/views/WarningPage.vue`（修改，勾选+送检按钮）
+  - `client/src/views/InstrumentList.vue`（修改，导出菜单+送检入口）
+
+### 阶段 2：导出空数据拦截 + 自定义列
+- **状态：** complete
+- 三个导出端点增加无数据判断（返回400而非空文件）
+- `/export/warning-apply` 支持 `?columns=` 参数自选导出字段
+- 前端新增导出列选择对话框（EXPORT_FIELD_OPTIONS）
+- 创建/修改的文件：
+  - `server/routes/instruments.js`（修改）
+  - `client/src/views/InstrumentList.vue`（修改）
+
+### 阶段 3：送检批次持久化
+- **状态：** complete
+- 新增 inspection_batches / inspection_batch_items 两张数据库表
+- 新增 batch CRUD API（8个端点）+ 导入申请表创建批次
+- 工作台改造为批次列表（默认）+ 批次详情（工作区）
+- 修复导航bug：取消创建后卡在空白页
+- 创建/修改的文件：
+  - `server/models/db.js`（修改）
+  - `server/models/inspectionBatch.js`（新建）
+  - `server/routes/inspectionBatches.js`（新建）
+  - `server/app.js`（修改）
+  - `client/src/api/instruments.js`（修改）
+  - `client/src/views/InspectionWorkspace.vue`（重写）
+
+### 阶段 4：台账总表存储与在线查看
+- **状态：** complete
+- 设计文档：[design-ledger-storage.md](docs/design-ledger-storage.md)
+- "保存台账"按钮改为"查看台账总表"+"上传台账总表"
+- 上传覆盖式存储到 `uploads/ledger/台账总表.xlsx`
+- 在线查看：Sheet标签页 + HTML表格渲染（自动检测表头行）
+- 修复 multer dest 缺失导致上传报错
+- 创建/修改的文件：
+  - `server/routes/instruments.js`（修改，3个ledger端点）
+  - `client/src/views/InstrumentList.vue`（修改）
+  - `client/src/api/instruments.js`（修改）
+
+### 阶段 5：证书附件 + 重复编号处理
+- **状态：** complete
+- 设计文档：[design-cert-attach-and-dup.md](docs/design-cert-attach-and-dup.md)
+- batch-upload 多条匹配改为 multi_match 状态，返回全部候选器具
+- 新增 POST /confirm-match 端点支持用户批量选择
+- 前端多条匹配弹窗：展示每条器具完整信息，默认勾选同类别，类别不一致标记
+- 创建/修改的文件：
+  - `server/routes/certificate.js`（修改）
+  - `client/src/views/InstrumentList.vue`（修改）
+  - `client/src/api/instruments.js`（修改）
+
+### 阶段 6：台账总表在线编辑（CRUD）
+- **状态：** complete
+- 台账查看对话框增加行编辑/删除/添加功能
+- 后端原子写入（临时文件+rename）防止文件损坏
+- 对抗性审查发现并修复2个bug：
+  - 取消添加后空行残留 → cancelLedgerEdit 中 pop 末尾行
+  - 空Sheet添加行列数无参考 → 用表头行或非空行推算
+- 创建/修改的文件：
+  - `server/routes/instruments.js`（修改，3个CRUD端点+原子写）
+  - `client/src/views/InstrumentList.vue`（修改）
+  - `client/src/api/instruments.js`（修改，3个API函数）

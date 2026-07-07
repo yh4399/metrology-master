@@ -190,9 +190,10 @@ router.post('/import', upload.single('file'), async (req, res) => {
       return res.status(400).json({ code: 400, message: '未找到"出厂编号"列，请确认文件格式' });
     }
 
-    // 生成批次名称
+    // 生成批次名称（multer 对中文文件名使用 latin1 编码，需转回 utf8）
+    const originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     const dateLabel = new Date().toISOString().slice(0, 10);
-    const batchName = '导入: ' + path.basename(req.file.originalname, path.extname(req.file.originalname)) + ' (' + dateLabel + ')';
+    const batchName = '导入: ' + path.basename(originalName, path.extname(originalName)) + ' (' + dateLabel + ')';
 
     // 创建批次
     const batch = InspectionBatch.create(batchName);

@@ -242,3 +242,38 @@
 - **原问题：** batch-upload 只按 serial_number 查找/更新，跨类别误匹配
 - **修复：** 新增 findBySerialNoAndCategory / updateCertificateBySerialNoAndCategory，双重匹配
 - **审查结果：** ⚠️ 警告文本不准确 + category=null 多条匹配风险 → 已修复：修正警告文本 + category=null 多条时标记 unmatched
+
+---
+
+## 2026-07-07 会话发现与决策
+
+### 送检批次持久化
+- 用户需要批次长期保留以便查看历史记录 → 新增 inspection_batches + inspection_batch_items 表
+- 批次创建入口：预警页/台账页勾选器具 + 导入检定申请表 Excel
+- 导入申请表时 multer 对中文文件名使用 latin1 编码 → `Buffer.from(originalname, 'latin1').toString('utf8')` 修复乱码
+
+### 台账总表存储
+- 用户的本意是存储总台账文件以供随时查看，而非导出 → "保存台账"改为上传+查看
+- 在线查看用 XLSX 解析为 JSON + 前端 HTML 表格渲染（Sheet 标签页切换）
+- XLSX 写入会丢失合并单元格和样式，但数据完整性不受影响
+- 原子写入（.tmp → rename）防止并发/中断导致文件损坏
+
+### 证书匹配改进
+- 多条匹配不应静默更新全部 → 改为 multi_match 状态，让用户逐条选择
+- 弹窗展示所有候选器具的完整信息（类别/编号/位置/型号/厂家/当前证书/日期）
+- 默认勾选同类别器具，跨类别标记警告
+
+### 台账 CRUD
+- 方案选 A（行级 CRUD）而非单元格编辑或数据打通，降低复杂度
+- 编辑状态管理：ledgerEditing (行索引) / ledgerAdding (bool) 互斥
+- 添加行后取消需清理残留空行
+- 空 Sheet 添加行时用表头行推算列数
+
+### 技术决策
+| 决策 | 理由 |
+|------|------|
+| 批次数据持久化到数据库 | 用户需要查看历史、长期保留 |
+| 台账总表用文件存储（非数据库） | Excel 是用户本来的工作方式，保持数据源独立性 |
+| 多匹配改为手动选择 | 比静默更新更安全，比仅 unmatched 更实用 |
+| 台账 CRUD 用整行替换模式 | 简单可靠，避免单元格级复杂度 |
+| 原子写（tmp+rename） | 防止写入中途崩溃导致文件损坏 |

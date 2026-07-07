@@ -793,39 +793,224 @@ router.get('/export/ledger', async (req, res) => {
 });
 
 // ============ 台账总表存储（fixed routes before /:id） ============
-const ledgerFilePath = path.join(__dirname, '..', 'uploads', 'ledger', '台账总表.xlsx');
+const ledgerDir = path.join(__dirname, '..', 'uploads', 'ledger');
 
-// GET /api/instruments/ledger/info — 检查台账总表是否存在
+// 辅助：获取当前最新台账文件
+function getLatestLedgerFile() {
+  if (!fs.existsSync(ledgerDir)) return null;
+  const files = fs.readdirSync(ledgerDir)
+    .filter(f => f.startsWith('台账总表_') && (f.endsWith('.xlsx') || f.endsWith('.xls')))
+    .sort()
+    .reverse();
+  return files.length > 0 ? path.join(ledgerDir, files[0]) : null;
+}
+
+// 辅助：列出所有台账文件（迁移旧格式）
+function listLedgerFiles() {
+  if (!fs.existsSync(ledgerDir)) return [];
+  // 迁移旧格式：台账总表.xlsx → 台账总表_$(mtime).xlsx
+  const oldPath = path.join(ledgerDir, '台账总表.xlsx');
+  if (fs.existsSync(oldPath)) {
+    try {
+      const stat = fs.statSync(oldPath);
+      const mtime = stat.mtime;
+      const ts = mtime.getFullYear() +
+        String(mtime.getMonth() + 1).padStart(2, '0') +
+        String(mtime.getDate()).padStart(2, '0') + '_' +
+        String(mtime.getHours()).padStart(2, '0') +
+        String(mtime.getMinutes()).padStart(2, '0') +
+        String(mtime.getSeconds()).padStart(2, '0');
+      const newName = '台账总表_' + ts + '.xlsx';
+      fs.renameSync(oldPath, path.join(ledgerDir, newName));
+    } catch (_) { /* ignore */ }
+  }
+  return fs.readdirSync(ledgerDir)
+    .filter(f => f.startsWith('台账总表_') && (f.endsWith('.xlsx') || f.endsWith('.xls')))
+    .sort()
+    .reverse()
+    .map(f => {
+      const stat = fs.statSync(path.join(ledgerDir, f));
+      return { fileName: f, size: stat.size, uploadedAt: stat.mtime.toISOString() };
+    });
+}
+
+// 辅助：解析台账文件名获取路径，加路径穿越防护
+function resolveLedgerFile(fileName) {
+  if (!fileName || !/^台账总表_[\d]+_\d+\.xlsx?$/.test(fileName)) return null;
+  const filePath = path.join(ledgerDir, fileName);
+  if (!filePath.startsWith(ledgerDir + path.sep)) return null; // 路径穿越防护
+  return fs.existsSync(filePath) ? filePath : null;
+}
+
+// GET /api/instruments/ledger/info — 台账文件信息 + 历史列表
 router.get('/ledger/info', (req, res) => {
   try {
-    const exists = fs.existsSync(ledgerFilePath);
-    if (!exists) return res.json({ code: 200, data: { exists: false } });
-    const stat = fs.statSync(ledgerFilePath);
-    res.json({
-      code: 200,
-      data: { exists: true, fileName: '台账总表.xlsx', size: stat.size, uploadedAt: stat.mtime.toISOString() }
-    });
+    const history = listLedgerFiles();
+    const current = history[0] || null;
+    res.json({ code: 200, data: { exists: !!current, current, history } });
   } catch (err) {
     res.status(500).json({ code: 500, message: err.message });
   }
 });
 
-// GET /api/instruments/ledger — 下载台账总表
+// GET /api/instruments/ledger — 下载台账总表（?file=xxx 下载指定版本，不传下载最新）
 router.get('/ledger', (req, res) => {
   try {
-    if (!fs.existsSync(ledgerFilePath)) {
-      return res.status(404).json({ code: 404, message: '台账总表尚未上传' });
+    let filePath;
+    if (req.query.file) {
+      filePath = resolveLedgerFile(req.query.file);
+      if (!filePath) return res.status(404).json({ code: 404, message: '指定版本不存在' });
+    } else {
+      filePath = getLatestLedgerFile();
+      if (!filePath) return res.status(404).json({ code: 404, message: '台账总表尚未上传' });
     }
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename*=UTF-8\'\'%E5%8F%B0%E8%B4%A6%E6%80%BB%E8%A1%A8.xlsx');
-    res.sendFile(ledgerFilePath);
+    res.sendFile(filePath);
   } catch (err) {
     res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// GET /api/instruments/ledger/view — 在线查看台账总表（?file=xxx 查看指定版本）
+router.get('/ledger/view', (req, res) => {
+  try {
+    let filePath;
+    if (req.query.file) {
+      filePath = resolveLedgerFile(req.query.file);
+      if (!filePath) return res.status(404).json({ code: 404, message: '指定版本不存在' });
+    } else {
+      filePath = getLatestLedgerFile();
+      if (!filePath) return res.status(404).json({ code: 404, message: '台账总表尚未上传' });
+    }
+    const XLSX = require('xlsx');
+    const workbook = XLSX.readFile(filePath);
+    const sheets = workbook.SheetNames.map(name => {
+      const ws = workbook.Sheets[name];
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      return { name, rows: data };
+    });
+    res.json({ code: 200, data: { sheets, fileName: path.basename(filePath) } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '解析失败: ' + err.message });
+  }
+});
+
+// 辅助：读写台账 Excel（操作最新文件）
+function readLedgerWorkbook() {
+  const f = getLatestLedgerFile();
+  if (!f) return null;
+  const XLSX = require('xlsx');
+  return XLSX.readFile(f);
+}
+function writeLedgerWorkbook(workbook) {
+  const f = getLatestLedgerFile();
+  if (!f) throw new Error('台账文件不存在');
+  const XLSX = require('xlsx');
+  const buf = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const tmpPath = f + '.tmp';
+  fs.writeFileSync(tmpPath, buf);
+  fs.renameSync(tmpPath, f);
+}
+
+// DELETE /api/instruments/ledger — 删除指定历史版本（?file=xxx）
+router.delete('/ledger', (req, res) => {
+  try {
+    const fileName = req.query.file;
+    if (!fileName) return res.status(400).json({ code: 400, message: '请指定要删除的文件' });
+    const filePath = resolveLedgerFile(fileName);
+    if (!filePath) return res.status(404).json({ code: 404, message: '文件不存在' });
+    const latest = getLatestLedgerFile();
+    if (filePath === latest) return res.status(400).json({ code: 400, message: '不能删除当前版本，请先上传新版本' });
+    fs.unlinkSync(filePath);
+    res.json({ code: 200, message: '已删除' });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// POST /api/instruments/ledger/row — 添加行
+router.post('/ledger/row', (req, res) => {
+  try {
+    const { sheetName, rowData } = req.body;
+    if (!sheetName || !rowData || !Array.isArray(rowData)) {
+      return res.status(400).json({ code: 400, message: '请提供 sheetName 和 rowData' });
+    }
+    const wb = readLedgerWorkbook();
+    if (!wb) return res.status(404).json({ code: 404, message: '台账总表不存在' });
+    if (!wb.SheetNames.includes(sheetName)) {
+      return res.status(400).json({ code: 400, message: 'Sheet "' + sheetName + '" 不存在' });
+    }
+    const ws = wb.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    data.push(rowData.map(v => (v !== null && v !== undefined ? v : '')));
+    const newWs = XLSX.utils.aoa_to_sheet(data);
+    wb.Sheets[sheetName] = newWs;
+    writeLedgerWorkbook(wb);
+    res.json({ code: 200, message: '已添加', data: { rowIndex: data.length - 1 } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '添加失败: ' + err.message });
+  }
+});
+
+// PUT /api/instruments/ledger/row — 更新行
+router.put('/ledger/row', (req, res) => {
+  try {
+    const { sheetName, rowIndex, rowData } = req.body;
+    if (!sheetName || rowIndex === undefined || !rowData || !Array.isArray(rowData)) {
+      return res.status(400).json({ code: 400, message: '参数不完整' });
+    }
+    const wb = readLedgerWorkbook();
+    if (!wb) return res.status(404).json({ code: 404, message: '台账总表不存在' });
+    if (!wb.SheetNames.includes(sheetName)) {
+      return res.status(400).json({ code: 400, message: 'Sheet "' + sheetName + '" 不存在' });
+    }
+    const ws = wb.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (rowIndex < 0 || rowIndex >= data.length) {
+      return res.status(400).json({ code: 400, message: '行索引越界' });
+    }
+    data[rowIndex] = rowData.map(v => (v !== null && v !== undefined ? v : ''));
+    const newWs = XLSX.utils.aoa_to_sheet(data);
+    wb.Sheets[sheetName] = newWs;
+    writeLedgerWorkbook(wb);
+    res.json({ code: 200, message: '已更新' });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '更新失败: ' + err.message });
+  }
+});
+
+// DELETE /api/instruments/ledger/row — 删除行
+router.delete('/ledger/row', (req, res) => {
+  try {
+    const { sheetName, rowIndex } = req.query;
+    if (!sheetName || rowIndex === undefined) {
+      return res.status(400).json({ code: 400, message: '请提供 sheetName 和 rowIndex' });
+    }
+    const idx = parseInt(rowIndex, 10);
+    const wb = readLedgerWorkbook();
+    if (!wb) return res.status(404).json({ code: 404, message: '台账总表不存在' });
+    if (!wb.SheetNames.includes(sheetName)) {
+      return res.status(400).json({ code: 400, message: 'Sheet "' + sheetName + '" 不存在' });
+    }
+    const ws = wb.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (idx < 0 || idx >= data.length) {
+      return res.status(400).json({ code: 400, message: '行索引越界' });
+    }
+    data.splice(idx, 1);
+    const newWs = XLSX.utils.aoa_to_sheet(data);
+    wb.Sheets[sheetName] = newWs;
+    writeLedgerWorkbook(wb);
+    res.json({ code: 200, message: '已删除' });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '删除失败: ' + err.message });
   }
 });
 
 // POST /api/instruments/ledger/upload — 上传台账总表（覆盖）
 const ledgerUpload = multer({
+  dest: path.join(__dirname, '..', 'uploads'),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -837,13 +1022,21 @@ const ledgerUpload = multer({
 router.post('/ledger/upload', ledgerUpload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ code: 400, message: '请上传Excel文件' });
-    // 覆盖保存
-    if (fs.existsSync(ledgerFilePath)) fs.unlinkSync(ledgerFilePath);
-    fs.renameSync(req.file.path, ledgerFilePath);
-    const stat = fs.statSync(ledgerFilePath);
+    // 时间戳命名，保留历史版本
+    const now = new Date();
+    const ts = now.getFullYear() +
+      String(now.getMonth() + 1).padStart(2, '0') +
+      String(now.getDate()).padStart(2, '0') + '_' +
+      String(now.getHours()).padStart(2, '0') +
+      String(now.getMinutes()).padStart(2, '0') +
+      String(now.getSeconds()).padStart(2, '0');
+    const destName = '台账总表_' + ts + '.xlsx';
+    const destPath = path.join(ledgerDir, destName);
+    fs.renameSync(req.file.path, destPath);
+    const stat = fs.statSync(destPath);
     res.json({
       code: 200,
-      data: { fileName: '台账总表.xlsx', size: stat.size, uploadedAt: stat.mtime.toISOString() },
+      data: { fileName: destName, size: stat.size, uploadedAt: stat.mtime.toISOString() },
       message: '台账总表已保存'
     });
   } catch (err) {
