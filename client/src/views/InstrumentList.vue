@@ -70,6 +70,12 @@
                   📝 导出检定申请表（选中 {{ selectedRows.length }} 条）
                 </el-dropdown-item>
                 <el-dropdown-item command="apply-all">📝 导出检定申请表（全部）</el-dropdown-item>
+                <el-dropdown-item divided command="workspace-selected" style="color:#409EFF;font-weight:600">
+                  🔧 送检工作台{{ selectedRows.length > 0 ? '（选中 ' + selectedRows.length + ' 条）' : '' }}
+                </el-dropdown-item>
+                <el-dropdown-item divided command="custom-apply" style="color:#e6a23c">
+                  ✏️ 自定义导出（自选列）
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -82,8 +88,11 @@
           <el-button plain @click="openRulesConfig" style="flex-shrink:0">
             <el-icon><Setting /></el-icon> 有效期规则
           </el-button>
-          <el-button plain @click="exportLedger" style="flex-shrink:0">
-            <el-icon><Download /></el-icon> 保存台账
+          <el-button plain @click="viewLedger" style="flex-shrink:0">
+            <el-icon><FolderOpened /></el-icon> 查看台账总表
+          </el-button>
+          <el-button plain @click="uploadLedgerDialog = true" style="flex-shrink:0">
+            <el-icon><Upload /></el-icon> 上传台账总表
           </el-button>
           <el-button plain @click="recycleBinVisible = true" style="flex-shrink:0">
             <el-icon><Delete /></el-icon> 回收站
@@ -266,6 +275,12 @@
               <template #default="{ row }">
                 <template v-if="row.status === 'matched'">
                   <el-tag size="small" type="success">✅ {{ row.matchedInstrument?.serial_number }}</el-tag>
+                </template>
+                <template v-else-if="row.status === 'multi_match'">
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <el-tag size="small" type="warning">⚠ 多条匹配（{{ row.matchedInstruments?.length }}）</el-tag>
+                    <el-button link size="small" type="primary" @click="openMultiMatchDialog(row)">处理</el-button>
+                  </div>
                 </template>
                 <template v-else-if="row.status === 'unmatched'">
                   <div style="display:flex;align-items:center;gap:4px">
@@ -476,6 +491,50 @@
         <el-button @click="createFromCertVisible = false">取消</el-button>
         <el-button type="primary" :loading="creatingFromCert" @click="executeCreateFromCert">
           创建器具并关联证书
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 多条匹配选择对话框 -->
+    <el-dialog v-model="multiMatchVisible" title="⚠ 多条匹配 — 请选择目标器具" width="700px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom:16px">
+        证书出厂编号 <code>{{ multiMatchCert?.serialNumber }}</code> 匹配到
+        <strong>{{ multiMatchCert?.matchedInstruments?.length || 0 }}</strong> 条器具，请选择要关联的目标（可多选）。
+      </el-alert>
+      <div class="multi-match-list">
+        <div v-for="inst in (multiMatchCert?.matchedInstruments || [])" :key="inst.id"
+          :class="['multi-match-item', { selected: multiMatchSelected.has(inst.id), mismatch: inst.categoryMatch === false }]"
+          @click="toggleMultiSelect(inst.id)">
+          <el-checkbox :model-value="multiMatchSelected.has(inst.id)" @click.stop @change="toggleMultiSelect(inst.id)" />
+          <div class="mm-info">
+            <div class="mm-line1">
+              <el-tag size="small" :type="inst.categoryMatch === false ? 'danger' : ''">#{{ inst.id }}</el-tag>
+              <span class="mm-category">{{ inst.category }}</span>
+              <code class="mm-serial">{{ inst.serial_number }}</code>
+              <el-tag v-if="inst.categoryMatch === false" size="small" type="danger">类别不一致</el-tag>
+            </div>
+            <div class="mm-line2">
+              <span>位置: {{ inst.installation_location || '-' }}</span>
+              <span>型号: {{ inst.model || '-' }}</span>
+              <span>厂家: {{ inst.manufacturer || '-' }}</span>
+            </div>
+            <div class="mm-line3">
+              <span>证书: {{ (inst.certificate_number || '').slice(-24) || '(空)' }}</span>
+              <span>检验日期: {{ inst.inspection_date || '(空)' }}</span>
+              <span :style="{ color: getMmDateColor(inst.valid_until) }">有效至: {{ inst.valid_until || '(空)' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <el-button link size="small" @click="multiMatchCert?.matchedInstruments?.forEach(i => multiMatchSelected.add(i.id))">全选</el-button>
+        <el-button link size="small" @click="multiMatchSelected.clear()">清空</el-button>
+        <span style="font-size:12px;color:#909399;margin-left:8px">已选 {{ multiMatchSelected.size }} 条</span>
+      </div>
+      <template #footer>
+        <el-button @click="multiMatchVisible = false">全部跳过</el-button>
+        <el-button type="primary" :disabled="multiMatchSelected.size === 0" :loading="multiMatching" @click="executeMultiMatch">
+          确认所选（{{ multiMatchSelected.size }} 条）
         </el-button>
       </template>
     </el-dialog>
@@ -963,6 +1022,56 @@
 
     <InstrumentHistoryDrawer v-model="historyVisible" :instrument="historyInstrument" @restored="fetchList" />
     <InstrumentRecycleBin v-model="recycleBinVisible" @restored="fetchList" />
+
+    <!-- 上传台账总表对话框 -->
+    <el-dialog v-model="uploadLedgerDialog" title="📥 上传台账总表" width="460px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
+        上传后将覆盖已有台账总表。上传后可在"查看台账总表"中随时打开。
+      </el-alert>
+      <el-upload
+        ref="ledgerUploadRef"
+        :auto-upload="false"
+        :limit="1"
+        accept=".xlsx,.xls"
+        :on-change="handleLedgerFileChange"
+        :on-remove="handleLedgerFileRemove"
+        drag
+      >
+        <div class="upload-drag-area">
+          <el-icon :size="36" color="#409EFF"><UploadFilled /></el-icon>
+          <p>拖拽Excel到此处，或<em>点击选择文件</em></p>
+        </div>
+      </el-upload>
+      <template #footer>
+        <el-button @click="uploadLedgerDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!ledgerFile" :loading="uploadingLedger" @click="handleUploadLedger">
+          确认上传
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导出列选择对话框 -->
+    <el-dialog v-model="exportColumnsVisible" title="📋 选择导出列" width="480px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
+        勾选需要导出的字段，未勾选的字段将不会出现在导出文件中。
+      </el-alert>
+      <div class="export-columns-grid">
+        <el-checkbox v-for="opt in EXPORT_FIELD_OPTIONS" :key="opt.value"
+          :model-value="exportSelectedColumns.includes(opt.value)"
+          @change="(val) => toggleExportColumn(opt.value, val)">
+          {{ opt.label }}
+        </el-checkbox>
+      </div>
+      <div style="margin-top:12px">
+        <el-button link size="small" @click="exportSelectedColumns = EXPORT_FIELD_OPTIONS.map(o => o.value)">全选</el-button>
+        <el-button link size="small" @click="exportSelectedColumns = []">清空</el-button>
+        <span style="margin-left:8px;font-size:12px;color:#909399">已选 {{ exportSelectedColumns.length }} / {{ EXPORT_FIELD_OPTIONS.length }} 列</span>
+      </div>
+      <template #footer>
+        <el-button @click="exportColumnsVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmExportWithColumns">确认导出</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -973,8 +1082,8 @@ import {
   Search, Plus, Upload, Download, Refresh, Edit, Delete, PictureFilled, DArrowRight, Camera, FolderOpened, ArrowDown, UploadFilled, FolderDelete, Warning, Filter, Select, Document, Setting, FolderAdd, List
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats, checkCertDates, batchUpdateCertDates, getValidityRules, createValidityRule, updateValidityRule, deleteValidityRule, resetValidityRules, uploadCertificateForInstrument, searchUnmatchedCert, forceMatchCert, createInstrumentFromCert } from '../api/instruments'
-import { STATUS_OPTIONS, STATUS_MAP, CATEGORIES, getCategoryColor } from '../utils/constants'
+import { getInstruments, deleteInstrument, exportInstruments, exportManagementSummary, exportWarningApply, batchUploadCertificates, getCategories, clearAllInstruments, clearByCategory, uploadPhoto, ocrFromUrl, getInstrumentStats, checkCertDates, batchUpdateCertDates, getValidityRules, createValidityRule, updateValidityRule, deleteValidityRule, resetValidityRules, uploadCertificateForInstrument, searchUnmatchedCert, forceMatchCert, createInstrumentFromCert, getLedgerInfo, uploadLedger, confirmCertMatch } from '../api/instruments'
+import { STATUS_OPTIONS, STATUS_MAP, CATEGORIES, getCategoryColor, FIELD_OPTIONS } from '../utils/constants'
 import { useAuthStore } from '../stores/auth'
 import InstrumentHistoryDrawer from '../components/InstrumentHistoryDrawer.vue'
 import InstrumentRecycleBin from '../components/InstrumentRecycleBin.vue'
@@ -998,6 +1107,10 @@ const tableRef = ref(null)
 const historyVisible = ref(false)
 const historyInstrument = ref(null)
 const recycleBinVisible = ref(false)
+const uploadLedgerDialog = ref(false)
+const ledgerFile = ref(null)
+const uploadingLedger = ref(false)
+const ledgerUploadRef = ref(null)
 
 // === 批量上传证书 ===
 const batchCertVisible = ref(false)
@@ -1015,6 +1128,10 @@ const fuzzyMatchVisible = ref(false)
 const confirmMatchVisible = ref(false)
 const manualMatchVisible = ref(false)
 const createFromCertVisible = ref(false)
+const multiMatchVisible = ref(false)
+const multiMatchCert = ref(null)
+const multiMatchSelected = reactive(new Set())
+const multiMatching = ref(false)
 const activeUnmatched = ref(null)
 const confirmMatchTarget = ref(null)
 const confirmUpdateSerial = ref(false)
@@ -1253,6 +1370,34 @@ const clearCategoryVisible = ref(false)
 const clearCategory = ref('')
 const clearCategoryLoading = ref(false)
 
+// === 导出列选择 ===
+const EXPORT_FIELD_OPTIONS = FIELD_OPTIONS.filter(o => !['range', 'classification', 'pressure_gauge_type'].includes(o.value))
+const exportColumnsVisible = ref(false)
+const exportSelectedColumns = ref(EXPORT_FIELD_OPTIONS.map(o => o.value))
+const pendingExportCommand = ref(null)
+
+function toggleExportColumn(value, checked) {
+  if (checked) {
+    if (!exportSelectedColumns.value.includes(value)) exportSelectedColumns.value.push(value)
+  } else {
+    exportSelectedColumns.value = exportSelectedColumns.value.filter(v => v !== value)
+  }
+}
+
+function openExportColumnPicker(command) {
+  pendingExportCommand.value = command
+  exportColumnsVisible.value = true
+}
+
+function confirmExportWithColumns() {
+  exportColumnsVisible.value = false
+  if (exportSelectedColumns.value.length === 0) {
+    ElMessage.warning('请至少选择一列')
+    return
+  }
+  handleExportCommand(pendingExportCommand.value, exportSelectedColumns.value.join(','))
+}
+
 // 类别数据计数（从stats API获取全部数据计数，而非当前页）
 const categoryCounts = ref({})
 
@@ -1393,10 +1538,15 @@ function handleSelectAllCommand(command) {
   }
 }
 
-async function handleExportCommand(command) {
+async function handleExportCommand(command, columns) {
   try {
     const params = {}
     let filename = ''
+
+    if (command === 'custom-apply') {
+      openExportColumnPicker('apply-all')
+      return
+    }
 
     if (command === 'export-all') {
       if (filters.keyword) params.keyword = filters.keyword
@@ -1512,6 +1662,7 @@ async function handleExportCommand(command) {
         }
         filename = '计量器具检定申请表（全选' + pagination.total + '条）_' + new Date().toISOString().slice(0, 10) + '.xlsx'
         ElMessage.info(`正在导出全部 ${pagination.total} 条记录...`)
+        if (columns) params.columns = columns
         const res = await exportWarningApply(params)
         const url = window.URL.createObjectURL(new Blob([res.data]))
         const link = document.createElement('a')
@@ -1528,6 +1679,7 @@ async function handleExportCommand(command) {
       }
       const ids = selectedRows.value.map(r => r.id).join(',')
       params.ids = ids
+      if (columns) params.columns = columns
       filename = '计量器具检定申请表（选中' + selectedRows.value.length + '条）_' + new Date().toISOString().slice(0, 10) + '.xlsx'
       ElMessage.info(`正在导出 ${selectedRows.value.length} 条记录...`)
       const res = await exportWarningApply(params)
@@ -1554,6 +1706,7 @@ async function handleExportCommand(command) {
         params.inspectionFrom = filters.inspectionDate
         params.inspectionTo = filters.inspectionDate
       }
+      if (columns) params.columns = columns
       filename = '计量器具检定申请表_' + new Date().toISOString().slice(0, 10) + '.xlsx'
       const res = await exportWarningApply(params)
       const url = window.URL.createObjectURL(new Blob([res.data]))
@@ -1563,6 +1716,16 @@ async function handleExportCommand(command) {
       link.click()
       window.URL.revokeObjectURL(url)
       ElMessage.success('检定申请表导出成功')
+      return
+    }
+
+    if (command === 'workspace-selected') {
+      if (selectedRows.value.length > 0) {
+        const ids = selectedRows.value.map(r => r.id).join(',')
+        router.push({ path: '/inspection-workspace', query: { ids } })
+      } else {
+        router.push({ path: '/inspection-workspace' })
+      }
       return
     }
   } catch (err) {
@@ -1823,6 +1986,60 @@ async function executeCreateFromCert() {
   }
 }
 
+// === 多条匹配处理 ===
+function openMultiMatchDialog(row) {
+  multiMatchCert.value = row
+  multiMatchSelected.clear()
+  // 默认勾选同类别且编号匹配的
+  row.matchedInstruments?.forEach(inst => {
+    if (inst.categoryMatch !== false) multiMatchSelected.add(inst.id)
+  })
+  multiMatchVisible.value = true
+}
+
+function toggleMultiSelect(id) {
+  if (multiMatchSelected.has(id)) multiMatchSelected.delete(id)
+  else multiMatchSelected.add(id)
+}
+
+function getMmDateColor(date) {
+  if (!date) return '#909399'
+  const diff = Math.ceil((new Date(date) - new Date()) / 86400000)
+  return diff < 0 ? '#ef4444' : diff <= 30 ? '#f59e0b' : '#059669'
+}
+
+async function executeMultiMatch() {
+  if (!multiMatchCert.value || multiMatchSelected.size === 0) return
+  multiMatching.value = true
+  try {
+    const res = await confirmCertMatch({
+      tempFilePath: multiMatchCert.value.tempFilePath,
+      certificateNumber: multiMatchCert.value.certificateNumber,
+      serialNumber: multiMatchCert.value.serialNumber,
+      category: multiMatchCert.value.category,
+      selectedInstrumentIds: [...multiMatchSelected],
+      inspectionDate: multiMatchCert.value.extractedInspectionDate || null,
+      validUntil: multiMatchCert.value.calculatedValidUntil || null
+    })
+    ElMessage.success(res.message || '已更新')
+    multiMatchVisible.value = false
+    // 从 batchResults 中移除已处理条目
+    if (batchResults.value) {
+      const idx = batchResults.value.findIndex(r => r === multiMatchCert.value)
+      if (idx >= 0) {
+        batchResults.value[idx].status = 'matched'
+        batchSummary.value.matched++
+        batchSummary.value.unmatched--
+      }
+    }
+    fetchList()
+  } catch (err) {
+    ElMessage.error('确认失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    multiMatching.value = false
+  }
+}
+
 // === 证书日期校验 ===
 function openCertCheck() {
   certCheckVisible.value = true
@@ -1905,9 +2122,35 @@ async function handleSingleCertUpload(row, event) {
 }
 
 // 保存台账（导出多Sheet Excel）
-function exportLedger() {
-  const url = '/api/instruments/export/ledger?token=' + authStore.token
-  window.open(url, '_blank')
+async function viewLedger() {
+  try {
+    const res = await getLedgerInfo()
+    if (res.data.exists) {
+      window.open('/api/instruments/ledger?token=' + authStore.token, '_blank')
+    } else {
+      ElMessage.warning('尚未上传台账总表，请先上传')
+    }
+  } catch (_) {
+    ElMessage.error('检查台账总表失败')
+  }
+}
+
+function handleLedgerFileChange(file) { ledgerFile.value = file.raw }
+function handleLedgerFileRemove() { ledgerFile.value = null }
+async function handleUploadLedger() {
+  if (!ledgerFile.value) return
+  uploadingLedger.value = true
+  try {
+    const res = await uploadLedger(ledgerFile.value)
+    ElMessage.success(res.message || '台账总表已保存')
+    uploadLedgerDialog.value = false
+    ledgerFile.value = null
+    ledgerUploadRef.value?.clearFiles()
+  } catch (err) {
+    ElMessage.error('上传失败：' + (err.response?.data?.message || err.message))
+  } finally {
+    uploadingLedger.value = false
+  }
 }
 
 // === 有效日期规则配置 ===
@@ -2489,4 +2732,20 @@ onMounted(async () => {
     width: 100%;
   }
 }
+
+/* 多条匹配选择 */
+.multi-match-list { display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; }
+.multi-match-item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px;
+  border: 1px solid #e4e7ed; border-radius: 8px; cursor: pointer; transition: all 0.2s;
+}
+.multi-match-item:hover { border-color: var(--primary-light); }
+.multi-match-item.selected { border-color: var(--primary); background: #eff6ff; }
+.multi-match-item.mismatch { border-color: #fef0f0; background: #fefafa; }
+.mm-info { flex: 1; min-width: 0; }
+.mm-line1 { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.mm-category { font-weight: 600; font-size: 13px; }
+.mm-serial { font-size: 12px; color: var(--primary); background: #eff6ff; padding: 1px 6px; border-radius: 3px; }
+.mm-line2 { display: flex; gap: 12px; font-size: 12px; color: #606266; margin-bottom: 3px; }
+.mm-line3 { display: flex; gap: 12px; font-size: 12px; color: #909399; }
 </style>

@@ -44,9 +44,14 @@
             <el-radio-button value="30days">30天内到期</el-radio-button>
           </el-radio-group>
         </div>
-        <el-button @click="handleExportWarning">
-          <el-icon><Download /></el-icon> 导出预警清单
-        </el-button>
+        <div style="display:flex;gap:8px">
+          <el-button type="primary" plain @click="goToWorkspace">
+            <el-icon><Setting /></el-icon> 送检工作台{{ selectedWarningIds.size > 0 ? '（' + selectedWarningIds.size + '）' : '' }}
+          </el-button>
+          <el-button @click="handleExportWarning">
+            <el-icon><Download /></el-icon> 导出预警清单
+          </el-button>
+        </div>
       </div>
 
       <el-table
@@ -58,7 +63,10 @@
         max-height="calc(100vh - 370px)"
         class="warning-table"
         @row-click="row => $router.push('/instruments/' + row.id)"
+        @selection-change="handleWarningSelectionChange"
+        ref="warningTableRef"
       >
+        <el-table-column type="selection" width="45" fixed="left" />
         <el-table-column type="index" label="序号" width="55" align="center" fixed="left" :index="indexMethod" />
 
         <el-table-column prop="category" label="器具类别" width="110" fixed="left" show-overflow-tooltip>
@@ -134,7 +142,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { CircleCloseFilled, WarningFilled, Clock, CircleCheckFilled, Download } from '@element-plus/icons-vue'
+import { CircleCloseFilled, WarningFilled, Clock, CircleCheckFilled, Download, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getInstruments, getInstrumentStats } from '../api/instruments'
 import axios from 'axios'
@@ -144,6 +152,21 @@ const router = useRouter()
 const loading = ref(false)
 const tableData = ref([])
 const filterMode = ref('all')
+const selectedWarningIds = reactive(new Set())
+const warningTableRef = ref(null)
+
+function handleWarningSelectionChange(rows) {
+  selectedWarningIds.clear()
+  rows.forEach(r => selectedWarningIds.add(r.id))
+}
+
+function goToWorkspace() {
+  if (selectedWarningIds.size > 0) {
+    router.push({ path: '/inspection-workspace', query: { ids: [...selectedWarningIds].join(',') } })
+  } else {
+    router.push({ path: '/inspection-workspace' })
+  }
+}
 
 const stats = reactive({
   expired: 0,

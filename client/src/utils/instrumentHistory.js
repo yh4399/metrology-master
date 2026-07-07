@@ -10,6 +10,7 @@ const SOURCE_LABELS = {
   certificate_create: '从证书新建器具',
   excel_import: 'Excel 导入',
   excel_import_overwrite: '台账导入覆盖',
+  inspection_batch: '送检批次更新',
   restore_version: '恢复历史版本',
   restore_deleted: '从回收站恢复',
   version_restore: '恢复历史版本',

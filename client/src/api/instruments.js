@@ -200,9 +200,51 @@ export function createInstrumentFromCert(data) {
   return request.post('/certificate/create-from-cert', data)
 }
 
+// 多条匹配时确认选择
+export function confirmCertMatch(data) {
+  return request.post('/certificate/confirm-match', data)
+}
+
 // ===== 导入冲突处理 =====
 
 // 解决导入冲突
 export function resolveImportConflicts(data) {
   return request.post('/instruments/import/resolve-conflicts', data)
+}
+
+// ===== 台账总表管理 =====
+export async function getLedgerInfo() {
+  return request.get('/instruments/ledger/info')
+}
+export async function uploadLedger(file) {
+  const authStore = useAuthStore()
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await axios.post('/api/instruments/ledger/upload', formData, {
+    headers: { Authorization: 'Bearer ' + authStore.token }
+  })
+  return response.data
+}
+
+// ===== 送检批次管理 =====
+export function getInspectionBatches() {
+  return request.get('/inspection-batches')
+}
+export function createInspectionBatch(data) {
+  return request.post('/inspection-batches', data)
+}
+export function getInspectionBatch(id) {
+  return request.get('/inspection-batches/' + id)
+}
+export function updateInspectionBatch(id, data) {
+  return request.put('/inspection-batches/' + id, data)
+}
+export function deleteInspectionBatch(id) {
+  return request.delete('/inspection-batches/' + id)
+}
+export function addBatchItems(batchId, instrumentIds) {
+  return request.post('/inspection-batches/' + batchId + '/items', { instrumentIds })
+}
+export function updateBatchItem(batchId, itemId, data) {
+  return request.put('/inspection-batches/' + batchId + '/items/' + itemId, data)
 }

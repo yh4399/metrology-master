@@ -163,6 +163,10 @@ router.get('/export', async (req, res) => {
       rows = await Instrument.findAll(req.query);
     }
 
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ code: 400, message: '没有符合条件的数据可导出' });
+    }
+
     const { EXPORT_SHEET_CONFIGS, extractValue, fmtExportDate } = excelService;
 
     // 按 category 分组（同时记录到配置的类别组）
@@ -351,6 +355,54 @@ router.get('/export', async (req, res) => {
   }
 });
 
+// ============ 导出列定义（自定义列选择用） ============
+const EXPORT_FIELD_MAP = {
+  category: '器具类别',
+  serial_number: '出厂编号',
+  installation_location: '安装位置',
+  model: '规格型号',
+  manufacturer: '生产厂家',
+  certificate_number: '证书编号',
+  inspection_date: '检验日期',
+  valid_until: '有效日期',
+  inspection_unit: '检验单位',
+  accuracy_class: '准确度等级',
+  status: '状态',
+  department: '所属部门',
+  range_min: '量程下限',
+  range_max: '量程上限',
+  range_unit: '量程单位',
+  mfg_date: '出厂日期',
+  inspection_result: '检验结果',
+  remark: '备注'
+};
+
+// 解析 columns 参数，返回要导出的字段列表
+function parseExportColumns(query) {
+  if (!query.columns || !String(query.columns).trim()) return null;
+  const requested = String(query.columns).split(',').map(s => s.trim()).filter(Boolean);
+  const valid = requested.filter(f => EXPORT_FIELD_MAP[f]);
+  return valid.length > 0 ? valid : null;
+}
+
+// 根据字段列表构建导出数据行
+function buildExportRow(row, fields, statusLabel) {
+  return fields.map(f => {
+    switch (f) {
+      case 'status': return statusLabel[row.status] || row.status || '';
+      case 'range_min': return row.range_min != null ? row.range_min : '';
+      case 'range_max': return row.range_max != null ? row.range_max : '';
+      case 'range_unit': return row.range_unit || '';
+      case 'mfg_date': {
+        const ef = row.extra_fields || {};
+        const parsed = typeof ef === 'string' ? (() => { try { return JSON.parse(ef); } catch (_) { return {}; } })() : ef;
+        return parsed.mfg_date || '';
+      }
+      default: return row[f] != null ? row[f] : '';
+    }
+  });
+}
+
 // ============ GET /api/instruments/export/management-summary ============
 // 导出格式严格按照"计量器具管理一览表"模板
 // 支持参数: ids (逗号分隔的ID列表), category, keyword, status, validFrom, validTo
@@ -514,6 +566,10 @@ router.get('/export/warning-apply', async (req, res) => {
       rows = await Instrument.findAll(req.query);
     }
 
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ code: 400, message: '没有符合条件的数据可导出' });
+    }
+
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('计量器具检定申请');
 
@@ -521,25 +577,32 @@ router.get('/export/warning-apply', async (req, res) => {
     const colWidths = [6, 14, 14, 12, 16, 18, 18, 22, 18, 10, 20];
     colWidths.forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
 
+    // 检测自定义列
+    const customColumns = parseExportColumns(req.query);
+
     // ====== 标题行 ======
+    const titleColSpan = customColumns ? customColumns.length + 1 : 11;
     const titleRow = sheet.addRow(['计量器具检定申请表']);
-    sheet.mergeCells(1, 1, 1, 11);
+    sheet.mergeCells(1, 1, 1, titleColSpan);
     titleRow.getCell(1).font = { bold: true, size: 16, name: '宋体' };
     titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
     titleRow.height = 36;
 
     // ====== 单位行 ======
-    const unitRow = sheet.addRow(['单位(盖章)：', '', '', '', '', '', '', '', '', '', '']);
-    sheet.mergeCells(2, 1, 2, 11);
+    const unitRow = sheet.addRow(['单位(盖章)：']);
+    sheet.mergeCells(2, 1, 2, titleColSpan);
     unitRow.getCell(1).font = { size: 11, name: '宋体' };
     unitRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
     unitRow.height = 28;
 
     // ====== 表头行 ======
-    const headers = [
-      '序号', '器具名称', '规格型号', '准确度等级', '测量范围',
-      '出厂编号', '生产厂家', '安装地点', '检定单位(推荐)', '检定要求', '备注'
-    ];
+    let headers;
+    if (customColumns) {
+      headers = customColumns.map(f => EXPORT_FIELD_MAP[f]);
+    } else {
+      headers = ['序号', '器具名称', '规格型号', '准确度等级', '测量范围',
+        '出厂编号', '生产厂家', '安装地点', '检定单位(推荐)', '检定要求', '备注'];
+    }
     const headerRow = sheet.addRow(headers);
     headerRow.eachCell((cell, colNumber) => {
       cell.font = { bold: true, size: 11, name: '宋体', color: { argb: 'FFFFFFFF' } };
@@ -552,27 +615,39 @@ router.get('/export/warning-apply', async (req, res) => {
     });
     headerRow.height = 30;
 
+    // 设置列宽
+    if (customColumns) {
+      headers.forEach((_, i) => { sheet.getColumn(i + 1).width = 16; });
+    }
+
     // ====== 数据行 ======
+    const statusLabel = { active: '在用', scrapped: '报废', borrowed: '借出', maintenance: '维修' };
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const rangeStr = (row.range_min !== null && row.range_max !== null)
-        ? `${row.range_min} ~ ${row.range_max}${row.range_unit ? ' ' + row.range_unit : ''}`
-        : (row.range_min !== null ? String(row.range_min) : (row.range_max !== null ? String(row.range_max) : ''));
 
-      const dataRow = sheet.addRow([
-        i + 1,                                          // 序号
-        row.category || '',                              // 器具名称
-        row.model || '',                                 // 规格型号
-        row.accuracy_class || '',                        // 准确度等级
-        rangeStr,                                        // 测量范围
-        row.serial_number || '',                         // 出厂编号
-        row.manufacturer || '',                          // 生产厂家
-        row.installation_location || '',                 // 安装地点
-        row.inspection_unit || '',                       // 检定单位(推荐)
-        row.inspection_result || '合格',                  // 检定要求
-        row.remark || ''                                 // 备注
-      ]);
+      let values;
+      if (customColumns) {
+        values = [i + 1, ...customColumns.map(f => {
+          if (f === 'status') return statusLabel[row.status] || row.status || '';
+          if (f === 'range_min') return row.range_min != null ? row.range_min : '';
+          if (f === 'range_max') return row.range_max != null ? row.range_max : '';
+          if (f === 'range_unit') return row.range_unit || '';
+          if (f === 'mfg_date') return row.extra_fields ? (() => { try { const ef = typeof row.extra_fields === 'string' ? JSON.parse(row.extra_fields) : row.extra_fields; return ef.mfg_date || ''; } catch (_) { return ''; } })() : '';
+          return row[f] != null ? row[f] : '';
+        })];
+      } else {
+        const rangeStr = (row.range_min !== null && row.range_max !== null)
+          ? `${row.range_min} ~ ${row.range_max}${row.range_unit ? ' ' + row.range_unit : ''}`
+          : (row.range_min !== null ? String(row.range_min) : (row.range_max !== null ? String(row.range_max) : ''));
+        values = [
+          i + 1, row.category || '', row.model || '', row.accuracy_class || '',
+          rangeStr, row.serial_number || '', row.manufacturer || '',
+          row.installation_location || '', row.inspection_unit || '',
+          row.inspection_result || '合格', row.remark || ''
+        ];
+      }
 
+      const dataRow = sheet.addRow(values);
       dataRow.eachCell((cell) => {
         cell.font = { size: 10, name: '宋体' };
         cell.border = {
@@ -583,11 +658,10 @@ router.get('/export/warning-apply', async (req, res) => {
       });
       // 序号列居中
       dataRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
-      // 准确度列居中
-      dataRow.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
-      // 检定要求列居中
-      dataRow.getCell(10).alignment = { horizontal: 'center', vertical: 'middle' };
-
+      if (!customColumns) {
+        dataRow.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
+        dataRow.getCell(10).alignment = { horizontal: 'center', vertical: 'middle' };
+      }
       dataRow.height = 24;
     }
 
@@ -715,6 +789,65 @@ router.get('/export/ledger', async (req, res) => {
   } catch (err) {
     console.error('台账导出失败:', err);
     res.status(500).json({ code: 500, message: '导出失败: ' + err.message });
+  }
+});
+
+// ============ 台账总表存储（fixed routes before /:id） ============
+const ledgerFilePath = path.join(__dirname, '..', 'uploads', 'ledger', '台账总表.xlsx');
+
+// GET /api/instruments/ledger/info — 检查台账总表是否存在
+router.get('/ledger/info', (req, res) => {
+  try {
+    const exists = fs.existsSync(ledgerFilePath);
+    if (!exists) return res.json({ code: 200, data: { exists: false } });
+    const stat = fs.statSync(ledgerFilePath);
+    res.json({
+      code: 200,
+      data: { exists: true, fileName: '台账总表.xlsx', size: stat.size, uploadedAt: stat.mtime.toISOString() }
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// GET /api/instruments/ledger — 下载台账总表
+router.get('/ledger', (req, res) => {
+  try {
+    if (!fs.existsSync(ledgerFilePath)) {
+      return res.status(404).json({ code: 404, message: '台账总表尚未上传' });
+    }
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename*=UTF-8\'\'%E5%8F%B0%E8%B4%A6%E6%80%BB%E8%A1%A8.xlsx');
+    res.sendFile(ledgerFilePath);
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// POST /api/instruments/ledger/upload — 上传台账总表（覆盖）
+const ledgerUpload = multer({
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.xlsx', '.xls'].includes(ext)) cb(null, true);
+    else cb(new Error('只支持 .xlsx 和 .xls 格式'));
+  }
+});
+
+router.post('/ledger/upload', ledgerUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ code: 400, message: '请上传Excel文件' });
+    // 覆盖保存
+    if (fs.existsSync(ledgerFilePath)) fs.unlinkSync(ledgerFilePath);
+    fs.renameSync(req.file.path, ledgerFilePath);
+    const stat = fs.statSync(ledgerFilePath);
+    res.json({
+      code: 200,
+      data: { fileName: '台账总表.xlsx', size: stat.size, uploadedAt: stat.mtime.toISOString() },
+      message: '台账总表已保存'
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '上传失败: ' + err.message });
   }
 });
 

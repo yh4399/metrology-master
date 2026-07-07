@@ -87,6 +87,37 @@ function createAllTables(database) {
   database.run('CREATE INDEX IF NOT EXISTS idx_ins_deleted ON instruments(is_deleted)');
   database.run('CREATE INDEX IF NOT EXISTS idx_versions_instrument ON instrument_versions(instrument_id)');
   database.run('CREATE INDEX IF NOT EXISTS idx_versions_created ON instrument_versions(created_at)');
+
+  // 送检批次
+  database.run(`CREATE TABLE IF NOT EXISTS inspection_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'draft',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+
+  database.run(`CREATE TABLE IF NOT EXISTS inspection_batch_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES inspection_batches(id) ON DELETE CASCADE,
+    instrument_id INTEGER NOT NULL,
+    serial_number TEXT,
+    category TEXT,
+    installation_location TEXT,
+    model TEXT,
+    manufacturer TEXT,
+    old_certificate_number TEXT,
+    old_inspection_date TEXT,
+    old_valid_until TEXT,
+    new_certificate_number TEXT,
+    new_inspection_date TEXT,
+    new_valid_until TEXT,
+    certificate_file TEXT,
+    match_status TEXT DEFAULT 'pending',
+    notes TEXT
+  )`);
+
+  database.run('CREATE INDEX IF NOT EXISTS idx_batch_items_batch ON inspection_batch_items(batch_id)');
 }
 
 function queryTableColumns(database, table) {

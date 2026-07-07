@@ -263,63 +263,23 @@ router.post('/batch-upload', auth, uploadTemp.array('files', 200), async (req, r
             );
             matchedCount++;
           } else if (instruments.length > 1) {
-            // 同编号有多条匹配记录
-            const instrument = instruments[0];
-
-            // 如果类别未知（无法从文件名前缀识别），且有多条不同类别的记录匹配，
-            // 则无法确定正确的目标，标记为 unmatched 避免跨类别误写入
-            if (fileResult.category === null) {
-              fileResult.status = 'unmatched';
-              fileResult.tempFilePath = file.path; // 保留临时文件供后续修正
-              fileResult.warning = `出厂编号 "${serialNumber}" 匹配到 ${instruments.length} 条不同类别的器具，无法自动确定目标。请手动确认类别后关联证书。`;
-              unmatchedCount++;
-            } else {
-              // 同编号同类别有多条重复记录，全部更新并标记警告
-              fileResult.matchedInstrument = {
-                id: instrument.id,
-                category: instrument.category,
-                serial_number: instrument.serial_number,
-                installation_location: instrument.installation_location,
-                manufacturer: instrument.manufacturer
-              };
-              fileResult.status = 'matched';
-              fileResult.warning = `出厂编号 "${serialNumber}" 在类别 "${fileResult.category}" 下有 ${instruments.length} 条重复记录，全部已更新（建议清理重复数据）`;
-
-              // === 同步更新检验日期和有效日期 ===
-              const inspectionDateMulti = extractInspectionDate(fileResult.certificateNumber);
-              const classificationMulti = getClassification(instrument);
-              const validUntilMulti = inspectionDateMulti ? calculateValidUntil(inspectionDateMulti, instrument.category, classificationMulti) : null;
-
-              const updateDataMulti = { certificate_number: fileResult.certificateNumber };
-              if (inspectionDateMulti) updateDataMulti.inspection_date = inspectionDateMulti;
-              if (validUntilMulti) updateDataMulti.valid_until = validUntilMulti;
-
-              fileResult.extractedInspectionDate = inspectionDateMulti;
-              fileResult.classification = classificationMulti;
-              fileResult.calculatedValidUntil = validUntilMulti;
-              fileResult.dateExtracted = !!inspectionDateMulti;
-
-              // === 保存证书 PDF 到持久目录 ===
-              try {
-                const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(instrument.id));
-                fs.mkdirSync(certDir, { recursive: true });
-                const safeCertNo = fileResult.certificateNumber.replace(/[<>:"/\\|?*]/g, '_');
-                const destPath = path.join(certDir, safeCertNo + '.pdf');
-                fs.copyFileSync(file.path, destPath);
-                updateDataMulti.certificate_file = `/uploads/certificates/${instrument.id}/${safeCertNo}.pdf`;
-                fileResult.savedCertificateFile = updateDataMulti.certificate_file;
-              } catch (fsErr) {
-                fileResult.certFileWarning = '证书文件保存失败: ' + fsErr.message;
-              }
-
-              fileResult.updatedInstrumentIds = await Instrument.updateCertificateWithHistoryBySerialNoAndCategory(
-                String(serialNumber),
-                fileResult.category,
-                updateDataMulti,
-                { source: 'certificate_upload', operatorId: req.userId }
-              );
-              matchedCount++;
-            }
+            // 同编号有多条匹配 — 返回全部候选让用户选择
+            fileResult.status = 'multi_match';
+            fileResult.tempFilePath = file.path;
+            fileResult.matchedInstruments = instruments.map(inst => ({
+              id: inst.id,
+              category: inst.category,
+              serial_number: inst.serial_number,
+              installation_location: inst.installation_location || '',
+              model: inst.model || '',
+              manufacturer: inst.manufacturer || '',
+              certificate_number: inst.certificate_number || '',
+              inspection_date: inst.inspection_date || '',
+              valid_until: inst.valid_until || '',
+              categoryMatch: fileResult.category ? inst.category === fileResult.category : null
+            }));
+            fileResult.warning = '出厂编号 "' + serialNumber + '" 匹配到 ' + instruments.length + ' 条器具，请手动选择';
+            unmatchedCount++;
           } else {
             fileResult.status = 'unmatched';
             fileResult.tempFilePath = file.path; // 保留临时文件供后续修正
@@ -815,6 +775,70 @@ router.post('/create-from-cert', auth, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ code: 500, message: '创建失败: ' + err.message });
+  }
+});
+
+// ============ POST /api/certificate/confirm-match ============
+// 多条匹配时，用户选择目标器具后确认
+router.post('/confirm-match', auth, async (req, res) => {
+  try {
+    const { tempFilePath, certificateNumber, serialNumber, category, selectedInstrumentIds, inspectionDate, validUntil } = req.body;
+
+    if (!selectedInstrumentIds || !Array.isArray(selectedInstrumentIds) || selectedInstrumentIds.length === 0) {
+      return res.status(400).json({ code: 400, message: '请选择至少一条器具' });
+    }
+
+    const updatedIds = [];
+    const errors = [];
+    let certFileWarning = null;
+
+    for (const instId of selectedInstrumentIds) {
+      try {
+        const instrument = await Instrument.findById(Number(instId));
+        if (!instrument) { errors.push('器具 #' + instId + ' 不存在'); continue; }
+
+        const updateData = { certificate_number: certificateNumber };
+        if (inspectionDate) updateData.inspection_date = inspectionDate;
+        if (validUntil) updateData.valid_until = validUntil;
+
+        // 保存证书 PDF
+        if (tempFilePath) {
+          try {
+            const absTempPath = path.resolve(tempFilePath);
+            const tempDir = path.resolve(path.join(__dirname, '..', 'uploads', 'temp_certs'));
+            if (absTempPath.startsWith(tempDir + path.sep) && fs.existsSync(absTempPath)) {
+              const certDir = path.join(__dirname, '..', 'uploads', 'certificates', String(instId));
+              fs.mkdirSync(certDir, { recursive: true });
+              const safeCertNo = (certificateNumber || serialNumber || 'cert').replace(/[<>:"/\\|?*]/g, '_');
+              const destPath = path.join(certDir, safeCertNo + '.pdf');
+              fs.copyFileSync(absTempPath, destPath);
+              updateData.certificate_file = '/uploads/certificates/' + instId + '/' + safeCertNo + '.pdf';
+            }
+          } catch (fsErr) { certFileWarning = '证书文件保存失败: ' + fsErr.message; }
+        }
+
+        await Instrument.updateWithHistory(instId, updateData, {
+          source: 'certificate_upload', operatorId: req.userId
+        });
+        updatedIds.push(instId);
+      } catch (err) { errors.push('#' + instId + ': ' + err.message); }
+    }
+
+    // 所有选中的处理完后，删除临时文件
+    if (tempFilePath) {
+      try {
+        const absTempPath = path.resolve(tempFilePath);
+        if (fs.existsSync(absTempPath)) fs.unlinkSync(absTempPath);
+      } catch (_) { /* ignore */ }
+    }
+
+    res.json({
+      code: 200,
+      data: { updated: updatedIds.length, updatedIds, errors, certFileWarning },
+      message: '已更新 ' + updatedIds.length + ' 条器具' + (errors.length > 0 ? '，' + errors.length + ' 条失败' : '')
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '确认匹配失败: ' + err.message });
   }
 });
 

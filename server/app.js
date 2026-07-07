@@ -11,10 +11,12 @@ const uploadsDir = path.join(__dirname, 'uploads');
 const photosDir = path.join(uploadsDir, 'photos');
 const certsDir = path.join(uploadsDir, 'certificates');
 const tempCertsDir = path.join(uploadsDir, 'temp_certs');
+const ledgerDir = path.join(uploadsDir, 'ledger');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(photosDir)) fs.mkdirSync(photosDir, { recursive: true });
 if (!fs.existsSync(certsDir)) fs.mkdirSync(certsDir, { recursive: true });
 if (!fs.existsSync(tempCertsDir)) fs.mkdirSync(tempCertsDir, { recursive: true });
+if (!fs.existsSync(ledgerDir)) fs.mkdirSync(ledgerDir, { recursive: true });
 
 // 清理超过 24 小时的临时证书文件
 try {
@@ -61,6 +63,7 @@ if (fs.existsSync(clientDist)) {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/instruments', require('./routes/instruments'));
 app.use('/api/certificate', require('./routes/certificate'));
+app.use('/api/inspection-batches', require('./routes/inspectionBatches'));
 
 // ==================== SPA fallback：非API请求返回index.html ====================
 if (fs.existsSync(clientDist)) {

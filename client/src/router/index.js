@@ -43,6 +43,12 @@ const routes = [
     name: 'WarningPage',
     component: () => import('../views/WarningPage.vue'),
     meta: { title: '到期预警' }
+  },
+  {
+    path: '/inspection-workspace',
+    name: 'InspectionWorkspace',
+    component: () => import('../views/InspectionWorkspace.vue'),
+    meta: { title: '送检工作台' }
   }
 ]
 
