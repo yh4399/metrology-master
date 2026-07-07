@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📋 证书日期校验" width="1100px" :close-on-click-modal="false" @open="$emit('load')">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📋 证书日期校验" width="1100px" :close-on-click-modal="false" @open="$emit('load')">
     <div v-loading="loading">
       <div v-if="data" style="margin-bottom:6px;display:flex;gap:6px;flex-wrap:wrap">
         <span style="font-size:13px;color:var(--text-secondary);line-height:24px">证书→检验：</span>
@@ -15,7 +15,7 @@
         <el-tag size="small" type="danger">缺失 {{ data.validMissing }}</el-tag>
       </div>
       <div v-if="data" style="margin-bottom:12px;display:flex;gap:8px">
-        <el-checkbox v-model="onlyMismatch" @change="$emit('load')">仅看不匹配/缺失</el-checkbox>
+        <el-checkbox :model-value="onlyMismatch" @update:model-value="$emit('update:onlyMismatch', $event); $emit('load')">仅看不匹配/缺失</el-checkbox>
         <el-button type="primary" size="small" :disabled="selected.length === 0" @click="$emit('batchUpdate')">批量更新选中项（{{ selected.length }}）</el-button>
       </div>
       <el-table v-if="data" :data="data.results" max-height="400" size="small" stripe @selection-change="(rows) => $emit('update:selected', rows)">

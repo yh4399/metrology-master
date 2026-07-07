@@ -21,6 +21,9 @@ export function useLedgerView(authStore) {
   const ledgerNewRow = ref([])
   const ledgerHistory = ref([])
   const ledgerCurrentFile = ref('')
+  // 单元格级编辑
+  const ledgerEditCell = ref(null)     // { row, col } or null
+  const ledgerEditValue = ref('')
 
   const currentLedgerSheet = computed(() => ledgerSheets.value[ledgerActiveSheet.value] || null)
   const ledgerTitle = computed(() => {
@@ -128,7 +131,41 @@ export function useLedgerView(authStore) {
     ledgerEditRow.value = [...row]
   }
 
+  // ---- 单元格双击编辑 ----
+  function startCellEdit(ri, ci, value) {
+    ledgerEditCell.value = { row: ri, col: ci }
+    ledgerEditValue.value = String(value ?? '')
+  }
+
+  async function saveCellEdit() {
+    const cell = ledgerEditCell.value
+    if (!cell) return
+    const sheet = currentLedgerSheet.value
+    if (!sheet) { ledgerEditCell.value = null; return }
+
+    const ri = cell.row, ci = cell.col
+    const newVal = ledgerEditValue.value
+    const oldVal = sheet.rows[ri]?.[ci]
+
+    ledgerEditCell.value = null
+
+    if (String(newVal) === String(oldVal ?? '')) return // 没变化
+
+    // 更新本地
+    if (sheet.rows[ri]) sheet.rows[ri][ci] = newVal
+
+    try {
+      await updateLedgerRow({ sheetName: sheet.name, rowIndex: ri, rowData: sheet.rows[ri] })
+      ElMessage.success('已更新')
+    } catch (err) {
+      // 回滚
+      if (sheet.rows[ri]) sheet.rows[ri][ci] = oldVal
+      ElMessage.error('更新失败：' + (err.response?.data?.message || err.message))
+    }
+  }
+
   function cancelLedgerEdit() {
+    ledgerEditCell.value = null
     if (ledgerAdding.value) {
       const sheet = currentLedgerSheet.value
       if (sheet && sheet.rows.length > 0) sheet.rows.pop()
@@ -199,10 +236,12 @@ export function useLedgerView(authStore) {
     ledgerViewVisible, ledgerViewLoading, ledgerSheets, ledgerActiveSheet,
     ledgerEditing, ledgerAdding, ledgerEditRow, ledgerNewRow,
     ledgerHistory, ledgerCurrentFile,
+    ledgerEditCell, ledgerEditValue,
     currentLedgerSheet, ledgerTitle, ledgerReadOnly,
     handleLedgerFileChange, handleLedgerFileRemove, handleUploadLedger,
     loadLedgerView, fmtLedgerHistoryLabel, switchLedgerVersion, confirmDeleteLedgerVersion,
     editLedgerRow, cancelLedgerEdit, saveLedgerRow, deleteLedgerRowConfirm,
-    startAddLedgerRow, saveNewLedgerRow, downloadLedger
+    startAddLedgerRow, saveNewLedgerRow, downloadLedger,
+    startCellEdit, saveCellEdit
   }
 }

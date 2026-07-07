@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="⚙ 有效日期计算规则" width="750px" :close-on-click-modal="false" @open="$emit('load')">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="⚙ 有效日期计算规则" width="750px" :close-on-click-modal="false" @open="$emit('load')">
     <div v-loading="loading">
       <div style="margin-bottom:12px;display:flex;gap:8px">
         <el-button size="small" type="danger" plain @click="$emit('reset')">重置为默认规则</el-button>

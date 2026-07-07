@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📝 用证书信息新建器具" width="520px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📝 用证书信息新建器具" width="520px" :close-on-click-modal="false">
     <el-form :model="form" label-width="90px" size="default">
       <el-form-item label="器具类别">
         <el-select v-model="form.category" filterable allow-create style="width:100%">

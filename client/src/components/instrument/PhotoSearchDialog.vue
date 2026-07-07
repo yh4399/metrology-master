@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📷 拍照查找计量器具" width="500px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📷 拍照查找计量器具" width="500px" :close-on-click-modal="false">
     <div class="photo-search-body">
       <p class="photo-search-hint">拍照或上传铭牌照片，系统自动识别出厂编号并查找对应器具</p>
       <div v-if="photoSearchPreview" class="photo-search-preview">

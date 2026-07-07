@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="按类别清空数据" width="420px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="按类别清空数据" width="420px" :close-on-click-modal="false">
     <el-alert title="此操作将删除指定类别下的所有计量器具记录，不可撤销！" type="warning" :closable="false" show-icon style="margin-bottom:16px" />
     <el-form label-width="80px">
       <el-form-item label="选择类别">

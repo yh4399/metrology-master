@@ -897,16 +897,15 @@ router.get('/ledger/view', (req, res) => {
 });
 
 // 辅助：读写台账 Excel（操作最新文件）
+const XLSX = require('xlsx');
 function readLedgerWorkbook() {
   const f = getLatestLedgerFile();
   if (!f) return null;
-  const XLSX = require('xlsx');
   return XLSX.readFile(f);
 }
 function writeLedgerWorkbook(workbook) {
   const f = getLatestLedgerFile();
   if (!f) throw new Error('台账文件不存在');
-  const XLSX = require('xlsx');
   const buf = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   const tmpPath = f + '.tmp';
   fs.writeFileSync(tmpPath, buf);

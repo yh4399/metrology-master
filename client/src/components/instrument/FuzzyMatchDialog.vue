@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="🔍 查找匹配器具" width="750px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="🔍 查找匹配器具" width="750px" :close-on-click-modal="false">
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
       证书出厂编号：<code>{{ cert?.serialNumber }}</code>，类别：<el-tag size="small">{{ cert?.category || '未知' }}</el-tag>
     </el-alert>

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📋 手动选择目标器具" width="820px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📋 手动选择目标器具" width="820px" :close-on-click-modal="false">
     <el-alert type="warning" :closable="false" show-icon style="margin-bottom:16px">
       证书出厂编号：<code>{{ cert?.serialNumber }}</code>，请选择要关联的器具
     </el-alert>

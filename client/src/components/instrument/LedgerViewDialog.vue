@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="title" width="95%" top="2vh" :close-on-click-modal="false" @open="$emit('load')" :destroy-on-close="true">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" :title="title" width="95%" top="2vh" :close-on-click-modal="false" @open="$emit('load')" :destroy-on-close="true">
     <div v-loading="loading">
       <div v-if="sheets.length > 0">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:4px">
@@ -35,9 +35,21 @@
                 <td class="ledger-actions"><el-button link type="success" size="small" @click="$emit('saveNewRow')">确认</el-button><el-button link type="info" size="small" @click="$emit('cancelEdit')">取消</el-button></td>
               </template>
               <template v-else>
-                <td v-for="(cell, ci) in row" :key="ci" :class="{ 'col-frozen': ci === 0 }">{{ cell }}</td>
+                <td v-for="(cell, ci) in row" :key="ci"
+                  :class="{ 'col-frozen': ci === 0, 'cell-editing': editCell && editCell.row === ri && editCell.col === ci }"
+                  @dblclick="ri !== currentSheet._headerIdx && !readOnly ? $emit('startCellEdit', ri, ci, cell) : null"
+                  :title="ri !== currentSheet._headerIdx && !readOnly ? '双击编辑' : ''">
+                  <input v-if="editCell && editCell.row === ri && editCell.col === ci"
+                    :value="editValue"
+                    @input="$emit('update:editValue', $event.target.value)"
+                    class="ledger-cell-input"
+                    @keydown.enter.stop="$emit('saveCellEdit')"
+                    @blur="$emit('saveCellEdit')"
+                    @keydown.escape.stop="$emit('cancelEdit')"
+                    @vue:mounted="(el) => { el.focus(); el.select(); }" />
+                  <span v-else>{{ cell }}</span>
+                </td>
                 <td class="ledger-actions" v-if="ri !== currentSheet._headerIdx && !readOnly">
-                  <el-button link type="primary" size="small" @click="$emit('editRow', ri, row)"><el-icon><Edit /></el-icon></el-button>
                   <el-button link type="danger" size="small" @click="$emit('deleteRow', ri)"><el-icon><Delete /></el-icon></el-button>
                 </td>
               </template>
@@ -58,10 +70,11 @@ import { Download, Plus, Edit, Delete } from '@element-plus/icons-vue'
 const props = defineProps({
   visible: Boolean, loading: Boolean, sheets: Array, history: Array, currentFile: String,
   editingRow: [Number, null], adding: Boolean, editRow: Array, newRow: Array, readOnly: Boolean,
+  editCell: Object, editValue: String,
   fmtLabel: Function, title: String
 })
-defineEmits(['update:visible', 'load', 'switchVersion', 'deleteVersion', 'download', 'addRow',
-  'editRow', 'saveRow', 'deleteRow', 'saveNewRow', 'cancelEdit'])
+defineEmits(['update:visible', 'update:editValue', 'load', 'switchVersion', 'deleteVersion', 'download', 'addRow',
+  'editRow', 'saveRow', 'deleteRow', 'saveNewRow', 'cancelEdit', 'startCellEdit', 'saveCellEdit'])
 
 const activeIdx = ref(0)
 const currentSheet = computed(() => props.sheets[activeIdx.value] || null)

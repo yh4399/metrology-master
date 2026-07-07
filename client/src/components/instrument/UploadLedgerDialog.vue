@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📥 上传台账总表" width="460px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📥 上传台账总表" width="460px" :close-on-click-modal="false">
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">上传后将覆盖已有台账总表。上传后可在"查看台账总表"中随时打开。</el-alert>
     <el-upload ref="uploadRef" :auto-upload="false" :limit="1" accept=".xlsx,.xls" :on-change="(f) => $emit('fileChange', f)" :on-remove="$emit('fileRemove')" drag>
       <div class="upload-drag-area">

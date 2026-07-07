@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="editing ? '编辑规则' : '新增规则'" width="420px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" :title="editing ? '编辑规则' : '新增规则'" width="420px" :close-on-click-modal="false">
     <el-form :model="form" label-width="80px" size="default">
       <el-form-item label="器具类别">
         <el-select v-model="form.category" filterable allow-create placeholder="选择或输入类别" style="width:100%">

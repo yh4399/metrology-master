@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="⚠ 确认以证书为准修正" width="500px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="⚠ 确认以证书为准修正" width="500px" :close-on-click-modal="false">
     <div style="line-height:2.2">
       <p>即将将以下器具关联到证书：</p>
       <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:13px">

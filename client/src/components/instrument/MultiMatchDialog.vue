@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="⚠ 多条匹配 — 请选择目标器具" width="700px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="⚠ 多条匹配 — 请选择目标器具" width="700px" :close-on-click-modal="false">
     <el-alert type="warning" :closable="false" show-icon style="margin-bottom:16px">
       证书出厂编号 <code>{{ cert?.serialNumber }}</code> 匹配到 <strong>{{ cert?.matchedInstruments?.length || 0 }}</strong> 条器具，请选择要关联的目标（可多选）。
     </el-alert>

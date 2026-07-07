@@ -118,11 +118,13 @@
     <LedgerViewDialog v-model:visible="ledgerViewVisible" :loading="ledgerViewLoading"
       :sheets="ledgerSheets" :history="ledgerHistory" :currentFile="ledgerCurrentFile"
       :editingRow="ledgerEditing" :adding="ledgerAdding" :editRow="ledgerEditRow" :newRow="ledgerNewRow"
+      :editCell="ledgerEditCell" v-model:editValue="ledgerEditValue"
       :readOnly="ledgerReadOnly" :fmtLabel="fmtLedgerHistoryLabel" :title="ledgerTitle"
       @load="loadLedgerView()" @switchVersion="switchLedgerVersion" @deleteVersion="confirmDeleteLedgerVersion"
       @download="downloadLedger" @addRow="startAddLedgerRow"
       @editRow="editLedgerRow" @saveRow="saveLedgerRow" @deleteRow="deleteLedgerRowConfirm"
-      @saveNewRow="saveNewLedgerRow" @cancelEdit="cancelLedgerEdit" />
+      @saveNewRow="saveNewLedgerRow" @cancelEdit="cancelLedgerEdit"
+      @startCellEdit="startCellEdit" @saveCellEdit="saveCellEdit" />
 
     <ExportColumnsDialog v-model:visible="exportColumnsVisible" :fieldOptions="EXPORT_FIELD_OPTIONS"
       :selected="exportSelectedColumns" @toggle="toggleExportColumn" @confirm="confirmExportWithColumns" />
@@ -389,7 +391,8 @@ const { uploadLedgerDialog, ledgerFile, uploadingLedger, ledgerUploadRef,
   handleLedgerFileChange, handleLedgerFileRemove, handleUploadLedger,
   loadLedgerView, fmtLedgerHistoryLabel, switchLedgerVersion, confirmDeleteLedgerVersion,
   editLedgerRow, cancelLedgerEdit, saveLedgerRow, deleteLedgerRowConfirm,
-  startAddLedgerRow, saveNewLedgerRow, downloadLedger } = useLedgerView(authStore)
+  startAddLedgerRow, saveNewLedgerRow, downloadLedger,
+  ledgerEditCell, ledgerEditValue, startCellEdit, saveCellEdit } = useLedgerView(authStore)
 
 // ---- 数据清空 ----
 const { clearCategoryVisible, clearCategory, clearCategoryLoading, categoryCounts,
@@ -530,4 +533,6 @@ onMounted(async () => {
 .ledger-table .header-row .col-frozen { background: #f1f5f9; }
 .ledger-table .ledger-actions { text-align: center; background: #f9fafb; }
 .ledger-edit-input { width: 100%; min-width: 80px; border: 1px solid #409EFF; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.ledger-cell-input { width: 100%; min-width: 60px; border: 2px solid #409EFF; padding: 2px 6px; border-radius: 3px; font-size: 12px; outline: none; box-sizing: border-box; }
+.cell-editing { padding: 0 !important; }
 </style>

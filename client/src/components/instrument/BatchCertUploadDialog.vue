@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📄 批量上传证书" width="700px" :close-on-click-modal="false" @close="$emit('reset')">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📄 批量上传证书" width="700px" :close-on-click-modal="false" @close="$emit('reset')">
     <div class="batch-cert-body">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
         <template #title>
@@ -8,7 +8,7 @@
         </template>
       </el-alert>
 
-      <el-upload ref="uploadRef" v-model:file-list="files" :auto-upload="false" :accept="'.pdf'" multiple drag :limit="200">
+      <el-upload ref="uploadRef" :file-list="files" @update:file-list="(list) => $emit('update:files', list)" :auto-upload="false" :accept="'.pdf'" multiple drag :limit="200">
         <template #default>
           <div class="upload-drag-area">
             <el-icon :size="48" color="#409EFF"><UploadFilled /></el-icon>

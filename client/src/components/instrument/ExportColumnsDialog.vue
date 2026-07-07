@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="📋 选择导出列" width="480px" :close-on-click-modal="false">
+  <el-dialog :model-value="visible" @update:model-value="$emit('update:visible', $event)" title="📋 选择导出列" width="480px" :close-on-click-modal="false">
     <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
       勾选需要导出的字段，未勾选的字段将不会出现在导出文件中。
     </el-alert>
