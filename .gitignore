@@ -5,6 +5,7 @@ uploads/*
 !uploads/.gitkeep
 server/uploads/*
 !server/uploads/.gitkeep
+docs/
 data/
 *.log
 .DS_Store
