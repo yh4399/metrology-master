@@ -101,6 +101,45 @@ const InspectionBatch = {
       "UPDATE inspection_batch_items SET match_status = 'updated' WHERE batch_id = ? AND match_status != 'updated'",
       [batchId]
     ).changes;
+  },
+
+  // ===== 计量确认记录 =====
+
+  // 获取确认记录预览数据（批次 + 项目 + 仪器信息）
+  getConfirmationPreview(batchId) {
+    const batch = queryOne('SELECT * FROM inspection_batches WHERE id = ?', [batchId]);
+    if (!batch) return null;
+
+    const items = queryAll(
+      `SELECT i.*, ins.category AS ins_category, ins.serial_number AS ins_serial_number,
+              ins.model AS ins_model, ins.manufacturer AS ins_manufacturer,
+              ins.range_min, ins.range_max, ins.range_unit, ins.accuracy_class,
+              ins.installation_location AS ins_installation_location,
+              ins.inspection_unit AS ins_inspection_unit
+       FROM inspection_batch_items i
+       LEFT JOIN instruments ins ON i.instrument_id = ins.id
+       WHERE i.batch_id = ?
+       ORDER BY i.id`,
+      [batchId]
+    );
+
+    return { batch, items };
+  },
+
+  // 保存批次确认信息
+  updateBatchConfirmationInfo(batchId, info) {
+    return run(
+      "UPDATE inspection_batches SET confirmation_info = ?, updated_at = datetime('now','localtime') WHERE id = ?",
+      [JSON.stringify(info || {}), batchId]
+    ).changes;
+  },
+
+  // 保存单个项目的确认数据
+  updateItemConfirmationData(batchId, itemId, data) {
+    return run(
+      'UPDATE inspection_batch_items SET confirmation_data = ? WHERE batch_id = ? AND id = ?',
+      [JSON.stringify(data || {}), batchId, itemId]
+    ).changes;
   }
 };
 

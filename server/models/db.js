@@ -118,6 +118,17 @@ function createAllTables(database) {
   )`);
 
   database.run('CREATE INDEX IF NOT EXISTS idx_batch_items_batch ON inspection_batch_items(batch_id)');
+
+  // 批次确认信息列迁移
+  const batchColumns = new Set(queryTableColumns(database, 'inspection_batches'));
+  if (!batchColumns.has('confirmation_info')) {
+    database.run("ALTER TABLE inspection_batches ADD COLUMN confirmation_info TEXT DEFAULT '{}'");
+  }
+
+  const batchItemColumns = new Set(queryTableColumns(database, 'inspection_batch_items'));
+  if (!batchItemColumns.has('confirmation_data')) {
+    database.run("ALTER TABLE inspection_batch_items ADD COLUMN confirmation_data TEXT DEFAULT '{}'");
+  }
 }
 
 function queryTableColumns(database, table) {

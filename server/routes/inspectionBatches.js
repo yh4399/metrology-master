@@ -247,4 +247,144 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
+// ============ GET /api/inspection-batches/:id/confirmation-preview — 确认记录预览 ============
+router.get('/:id/confirmation-preview', async (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
+    const data = InspectionBatch.getConfirmationPreview(batchId);
+    if (!data) return res.status(404).json({ code: 404, message: '批次不存在' });
+
+    // 解析 JSON 字段
+    const batch = {
+      ...data.batch,
+      confirmationInfo: JSON.parse(data.batch.confirmation_info || '{}')
+    };
+
+    const items = data.items.map(item => {
+      const confirmationData = JSON.parse(item.confirmation_data || '{}');
+      return {
+        id: item.id,
+        instrument_id: item.instrument_id,
+        serial_number: item.serial_number,
+        category: item.category,
+        installation_location: item.installation_location,
+        model: item.model,
+        manufacturer: item.manufacturer,
+        old_certificate_number: item.old_certificate_number,
+        old_inspection_date: item.old_inspection_date,
+        old_valid_until: item.old_valid_until,
+        new_certificate_number: item.new_certificate_number,
+        new_inspection_date: item.new_inspection_date,
+        new_valid_until: item.new_valid_until,
+        certificate_file: item.certificate_file,
+        match_status: item.match_status,
+        instrument: {
+          category: item.ins_category || item.category,
+          serial_number: item.ins_serial_number || item.serial_number,
+          model: item.ins_model || item.model,
+          manufacturer: item.ins_manufacturer || item.manufacturer,
+          accuracy_class: item.accuracy_class || '',
+          range: item.range_min != null ? `${item.range_min}～${item.range_max}${item.range_unit || ''}` : '',
+          installation_location: item.ins_installation_location || item.installation_location,
+          inspection_unit: item.ins_inspection_unit || ''
+        },
+        confirmationData: {
+          detectionResult: confirmationData.detectionResult || '',
+          detectionUnit: confirmationData.detectionUnit || (item.ins_inspection_unit || ''),
+          fieldRange: confirmationData.fieldRange || '',
+          fieldAccuracy: confirmationData.fieldAccuracy || '',
+          sealLabelIntact: confirmationData.sealLabelIntact || '完好',
+          confirmationResult: confirmationData.confirmationResult || '符合使用要求',
+          remarks: confirmationData.remarks || ''
+        }
+      };
+    });
+
+    res.json({ code: 200, data: { batch, items } });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// ============ PUT /api/inspection-batches/:id/confirmation — 保存确认数据 ============
+router.put('/:id/confirmation', (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
+    const batch = InspectionBatch.findById(batchId);
+    if (!batch) return res.status(404).json({ code: 404, message: '批次不存在' });
+
+    const { confirmationInfo, items } = req.body;
+
+    // 保存批次级别确认信息
+    if (confirmationInfo) {
+      InspectionBatch.updateBatchConfirmationInfo(batchId, confirmationInfo);
+    }
+
+    // 保存每个项目的确认数据
+    let itemCount = 0;
+    if (items && Array.isArray(items)) {
+      for (const it of items) {
+        if (it.id && it.confirmationData) {
+          InspectionBatch.updateItemConfirmationData(batchId, it.id, it.confirmationData);
+          itemCount++;
+        }
+      }
+    }
+
+    res.json({ code: 200, data: { itemCount }, message: '保存成功' });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: err.message });
+  }
+});
+
+// ============ GET /api/inspection-batches/:id/export-confirmation — 导出确认记录 ============
+router.get('/:id/export-confirmation', async (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
+    const data = InspectionBatch.getConfirmationPreview(batchId);
+    if (!data) return res.status(404).json({ code: 404, message: '批次不存在' });
+
+    // 解析数据（复用 preview 的数据处理逻辑）
+    const batchInfo = JSON.parse(data.batch.confirmation_info || '{}');
+    const items = data.items.map(item => {
+      const cd = JSON.parse(item.confirmation_data || '{}');
+      return {
+        serial_number: item.ins_serial_number || item.serial_number,
+        category: item.ins_category || item.category,
+        model: item.ins_model || item.model,
+        accuracy_class: item.accuracy_class || '',
+        range: item.range_min != null
+          ? `${item.range_min}～${item.range_max}${item.range_unit || ''}`
+          : '',
+        installation_location: item.ins_installation_location || item.installation_location,
+        inspection_unit: cd.detectionUnit || item.ins_inspection_unit || '',
+        certificate_number: item.new_certificate_number || '',
+        inspection_date: item.new_inspection_date || '',
+        detectionResult: cd.detectionResult || '',
+        fieldRange: cd.fieldRange || '',
+        fieldAccuracy: cd.fieldAccuracy || '',
+        sealLabelIntact: cd.sealLabelIntact || '完好',
+        confirmationResult: cd.confirmationResult || '符合使用要求',
+        remarks: cd.remarks || ''
+      };
+    });
+
+    const ConfirmationExport = require('../services/confirmationExport');
+    const workbook = ConfirmationExport.generate(batchInfo, items);
+    const tempPath = path.join(__dirname, '..', 'uploads', `confirmation_${batchId}_${Date.now()}.xlsx`);
+
+    await workbook.xlsx.writeFile(tempPath);
+
+    const filename = `计量确认记录_${batchInfo.usingUnit || '未命名单位'}_${new Date().toISOString().slice(0,10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.download(tempPath, filename, (err) => {
+      try { fs.unlinkSync(tempPath); } catch (_) {}
+      if (err) console.error('下载失败:', err);
+    });
+  } catch (err) {
+    res.status(500).json({ code: 500, message: '导出失败: ' + err.message });
+  }
+});
+
 module.exports = router;

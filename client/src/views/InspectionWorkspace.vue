@@ -56,6 +56,9 @@
           <el-button type="primary" plain @click="exportManagementSheet">
             <el-icon><List /></el-icon> 导出管理一览表
           </el-button>
+          <el-button type="warning" plain @click="openConfirmationDialog" v-if="updatedCount > 0">
+            📋 计量确认记录
+          </el-button>
           <el-button type="warning" plain @click="markBatchCompleted" v-if="batchStatus !== 'completed'">
             标记完成
           </el-button>
@@ -186,6 +189,9 @@
       </template>
     </el-dialog>
 
+    <!-- 计量确认记录预览对话框 -->
+    <ConfirmationPreviewDialog v-model="showConfirmationDialog" :batch-id="batchId" />
+
     <!-- 导入申请表对话框 -->
     <el-dialog v-model="showImportDialog" title="📥 导入检定申请表" width="480px">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px">
@@ -233,6 +239,7 @@ import {
 } from '../api/instruments'
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
+import ConfirmationPreviewDialog from '../components/ConfirmationPreviewDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -256,6 +263,12 @@ const importFile = ref(null)
 const importPreview = ref(null)
 const importingBatch = ref(false)
 const importUploadRef = ref(null)
+
+// ===== 计量确认记录 =====
+const showConfirmationDialog = ref(false)
+function openConfirmationDialog() {
+  showConfirmationDialog.value = true
+}
 
 // ===== 证书 =====
 const certFiles = ref([])

@@ -264,3 +264,19 @@ export function addBatchItems(batchId, instrumentIds) {
 export function updateBatchItem(batchId, itemId, data) {
   return request.put('/inspection-batches/' + batchId + '/items/' + itemId, data)
 }
+
+// ===== 计量确认记录 =====
+export function getConfirmationPreview(batchId) {
+  return request.get(`/inspection-batches/${batchId}/confirmation-preview`)
+}
+export function saveConfirmation(batchId, data) {
+  return request.put(`/inspection-batches/${batchId}/confirmation`, data)
+}
+export async function exportConfirmation(batchId) {
+  const authStore = useAuthStore()
+  const response = await axios.get(`/api/inspection-batches/${batchId}/export-confirmation`, {
+    responseType: 'blob',
+    headers: { Authorization: 'Bearer ' + authStore.token }
+  })
+  return response
+}
