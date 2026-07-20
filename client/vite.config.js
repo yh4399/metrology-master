@@ -11,5 +11,15 @@ export default defineConfig({
         changeOrigin: true
       }
     }
-  }
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'text-summary', 'json-summary'],
+      include: ['src/**/*.{js,vue}'],
+      exclude: ['src/main.js', 'src/router/**'],
+    },
+  },
 })
